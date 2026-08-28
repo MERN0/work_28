@@ -7,8 +7,20 @@ a time.
 from __future__ import annotations
 
 import os
+import sys
 import zipfile
 from datetime import datetime
+
+if __package__ in (None, ""):
+    # Running as a standalone script (`python sys5.py ...`), not imported as
+    # part of the app.core.artifacts.system.sys5 package - there's no package
+    # context for the relative imports below to resolve against. Locate
+    # backend/ (this file's 5th ancestor: sys5/ -> system/ -> artifacts/ ->
+    # core/ -> app/ -> backend/), put it on sys.path, and set __package__
+    # (PEP 366) so the relative imports work exactly as they do when the
+    # package is imported normally - no other module needs to change.
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), *([os.pardir] * 5))))
+    __package__ = "app.core.artifacts.system.sys5"
 
 from .config import Settings
 from .graph import run_pipeline
@@ -48,3 +60,24 @@ def _finalise(produced: ProducedManifest, settings: Settings) -> str:
         f"({produced.flagged_count} flagged for review). Output: {zip_path}"
     )
     return zip_path
+
+
+def main() -> int:
+    """Minimal standalone entry point: `python sys5.py <config.json>`. Reads
+    the config dict from the given JSON file, runs generate(), and prints the
+    resulting artifact path."""
+    import json
+
+    if len(sys.argv) < 2:
+        print("Usage: python sys5.py <config.json>", file=sys.stderr)
+        return 1
+
+    with open(sys.argv[1]) as fh:
+        config = json.load(fh)
+
+    print(generate(config))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
