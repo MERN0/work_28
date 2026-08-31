@@ -177,6 +177,17 @@ mode signal that only appears in the Comm Matrix/Command List (e.g. a
 "PwrCtrlMode"-style signal) is set/verified via SDO_Set/SDO_Verify; a
 sensor/switch signal that appears in Model Input Mapping (e.g. an
 "MDL_SEN_"/"MDL_SWH_"-prefixed signal) is set/verified via plain Set/Verify.
+For every SDO_Set/SDO_Verify step, the signal name you write MUST be one of
+the exact Command List candidates given to you for that signal below (the
+naming convention shown, e.g. "CAN_HIL_...", is real but you cannot derive a
+correct name from the pattern alone - always copy it verbatim from the
+candidate list; if none of a signal's candidates are a plausible match, use
+a different, real signal instead of inventing one).
+
+A "Compound <Command_Name>" step is atomic - it already fully implements
+whatever it does internally. Never separately re-emit its internal
+signals/steps as your own Set/Verify/SDO_Set/SDO_Verify steps; reference it
+by name only.
 
 Structure the steps into three phases, in this order:
   PRECONDITION - establish the starting state (power on, key on, default

@@ -67,7 +67,7 @@ from .nodes import (
 )
 from .pipeline_config import PipelineConfig
 from .schema import Requirement, format_heading_info
-from .state import PipelineState, TestCaseState, valid_signal_names
+from .state import PipelineState, TestCaseState
 from .workbook_store import InMemoryWorkbookStore
 
 _logger = get_logger(__name__)
@@ -138,6 +138,37 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, settings: Se
     return graph.compile()
 
 
+def _build_signal_reference(store: InMemoryWorkbookStore, state: PipelineState) -> list[str]:
+    """One line per feature-valid signal, always showing its real Command
+    List candidates (not just the single best match above
+    command_match_threshold - see comm_matrix_extract.py). That threshold
+    exists to fast-path a *deterministic* CommMatrixSignal.command_name for
+    other callers; gating what the LLM ever SEES on that same threshold was
+    the actual cause of a near-total hallucination rate on SDO_Set/SDO_Verify
+    steps - a signal whose true match scored just under the cutoff (or whose
+    naming differed slightly) never had its real command name shown at all,
+    so the LLM had to guess a plausible 'CAN_HIL_<Name>' pattern instead of
+    picking a real one - and that guess essentially never exists. Recomputing
+    top_k candidates fresh here (cheap - a local rapidfuzz call, not an LLM
+    cost) and always showing them lets the LLM make the actual judgment call
+    itself, same pattern as compound_command_map's shortlist."""
+    lines = []
+    for sig in state.get("comm_matrix_valid", []):
+        lookup_key = sig.signal_name or sig.logical_signal_name
+        if not lookup_key:
+            continue
+        candidates = store.lookup_command_name(lookup_key, top_k=3)
+        cand_text = ", ".join(f"{c['command_name']!r} (match {c['score']:.0f})" for c in candidates) or "no Command List match found"
+        lines.append(
+            f"- Logical Signal Name={sig.logical_signal_name!r} Signal Name={sig.signal_name!r} "
+            f"- Command List candidates for SDO_Set/SDO_Verify: {cand_text}"
+        )
+    for sig in state.get("io_signal_valid", []):
+        if sig.logical_signal_name:
+            lines.append(f"- Logical Signal Name={sig.logical_signal_name!r} - a Model Input signal, use with Set/Verify directly")
+    return lines
+
+
 def _make_context_builder(store: InMemoryWorkbookStore):
     """Builds the per-test-case `context` dict passed into the inner
     subgraph's initial `TestCaseState` (see `nodes/test_case_loop.py`) -
@@ -174,7 +205,7 @@ def _make_context_builder(store: InMemoryWorkbookStore):
         return {
             "feature_name": state.get("feature_name", ""),
             "factor_signal_resolutions": state.get("factor_signal_resolutions", {}),
-            "valid_signals": valid_signal_names(state),
+            "signal_reference": _build_signal_reference(store, state),
             "tolerances": tolerances,
             "compound_command_details": compound_details,
             "library_details": library_details,

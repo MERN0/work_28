@@ -484,3 +484,32 @@ dry run of the pipeline (not just static review)**:
    - `"low"` trades planning depth for a large wall-clock win on a reasoning
    model like gpt-oss). `call_llm()` also now logs each call's wall-clock at
    INFO, so `sys5_run.log` shows exactly which call is slow.
+
+6. **Near-total hallucination rate on `SDO_Set`/`SDO_Verify` steps** (~9 of
+   10 steps flagged by `hallucination_check`, every one a `ref_kind="command"`
+   miss), reported against a real run. Root cause:
+   `comm_matrix_extract.py`'s `CommMatrixSignal.command_name` is only
+   populated when a signal's Command List fuzzy match scores
+   `>= command_match_threshold` (80) - a deterministic fast-path for other
+   callers - but `generate`'s prompt only ever showed *that* gated value via
+   `state.valid_signal_names()`. Any signal whose true match scored just
+   under 80 (or whose real-world naming simply didn't score that cleanly)
+   had its real Command List name hidden from the LLM entirely - it then had
+   to guess a plausible `CAN_HIL_<Name>`/`CAN_Main_<Name>` name from the
+   *pattern* the prompt itself demonstrates, and an invented name essentially
+   never matches a real Command List entry. Fixed with
+   `graph.py::_build_signal_reference()`: for every feature-valid signal,
+   recompute `store.lookup_command_name(..., top_k=3)` fresh (cheap - a
+   local rapidfuzz call, not an LLM cost) and show the real candidates
+   unconditionally, letting the LLM make the actual judgment call itself -
+   the same shortlist-then-LLM-picks pattern `compound_command_map` already
+   used. Replaces the old flat `context["valid_signals"]` list with
+   `context["signal_reference"]` in both `generate.py` and `correct.py`;
+   `prompts.py`'s `generate` prompt was also tightened to say explicitly
+   that a Command List name must be copied verbatim from a given candidate,
+   never derived from the naming pattern alone, and that a `Compound <name>`
+   step is atomic (never re-emit its internal steps as separate steps -
+   a second, smaller contributing risk to the same failure mode). See
+   `tests/test_context_builder.py` for a direct regression test (asserts a
+   signal with `command_name=None` - the exact below-threshold case - still
+   surfaces its real candidates).

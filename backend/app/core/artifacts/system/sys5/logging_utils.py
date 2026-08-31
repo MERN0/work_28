@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from contextlib import contextmanager
 from typing import Iterator
@@ -34,13 +35,37 @@ def configure_logging(pipeline_config: PipelineConfig, output_dir: str | None = 
 
     formatter = logging.Formatter(pipeline_config.log_format)
 
+    # Windows consoles default to a legacy codepage (e.g. cp1252) that can't
+    # encode characters an LLM's generated text may legitimately contain
+    # (typographic dashes, non-breaking hyphens, ...). A write like that
+    # doesn't crash the run on its own (logging.Handler.emit catches its own
+    # encode errors), but does spam stderr with a "--- Logging error ---"
+    # dump instead of the actual message - and a plain print() of the same
+    # text (e.g. sys5.py's final summary) genuinely would raise. Reconfigure
+    # both streams once, here, to substitute an escape sequence for the
+    # unencodable character instead of failing, on whatever encoding the
+    # console already uses - covers logging.StreamHandler() (which defaults
+    # to stderr) and every later print() alike. Not all streams support
+    # reconfigure() (e.g. one captured by a test runner), so this is
+    # best-effort.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
     console = logging.StreamHandler()
     console.setFormatter(formatter)
     root.addHandler(console)
 
     if pipeline_config.log_to_file and output_dir:
         os.makedirs(output_dir, exist_ok=True)
-        file_handler = logging.FileHandler(os.path.join(output_dir, pipeline_config.log_file_name))
+        # The log file is always real UTF-8 regardless of console codepage,
+        # so it never fails to write - same escape-sequence fallback as the
+        # console handler for the (should be impossible) remaining case.
+        file_handler = logging.FileHandler(
+            os.path.join(output_dir, pipeline_config.log_file_name), encoding="utf-8", errors="backslashreplace"
+        )
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
 
