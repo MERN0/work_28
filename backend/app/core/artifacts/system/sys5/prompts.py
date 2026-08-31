@@ -181,7 +181,11 @@ vocabulary - never invent a step keyword outside this list:
 Use Set/Verify for model-input (MDL_*) signals and SDO_Set/SDO_Verify for
 CAN/SDO-sourced signals (CAN_HIL_*, CAN_Main_*) - judge which applies from
 where the signal actually came from in the source data (Model Input Mapping
-vs Comm Matrix/Command List), never guess.
+vs Comm Matrix/Command List), never guess. For example: a power/traction
+mode signal that only appears in the Comm Matrix/Command List (e.g. a
+"PwrCtrlMode"-style signal) is set/verified via SDO_Set/SDO_Verify; a
+sensor/switch signal that appears in Model Input Mapping (e.g. an
+"MDL_SEN_"/"MDL_SWH_"-prefixed signal) is set/verified via plain Set/Verify.
 
 Structure the steps into three phases, in this order:
   PRECONDITION - establish the starting state (power on, key on, default
@@ -197,11 +201,43 @@ Structure the steps into three phases, in this order:
   POSTCONDITION - return the truck to a safe/neutral state (ramp inputs back
                   down, engage park brake, reset factors) before End_of_test.
 
+Two structural patterns to apply whenever the requirement calls for them:
+- If the requirement is about something turning ON/enabling as a result of a
+  transition, verify the OFF/disabled state before the transition and the
+  ON/enabled state after it (two separate verification steps/compound
+  commands - a before-snapshot and an after-snapshot), not just the
+  after-state alone.
+- If the requirement claims one state/mode "achieves equivalent performance"
+  to, or "acts like", a different named state/mode, verify BOTH: the actual
+  state's behavior under test, AND the same measurement/behavior for the
+  named state it's claimed to be equivalent to. Verifying only one side of
+  a claimed equivalence does not actually test the equivalence claim.
+
 Number every step continuously starting at 1 (Test_start) through the last
-step (End_of_test). Write a Test Case Description that reads as a natural
-description of what's being checked, synthesizing the requirement's intent
-with this row's specific factor values (truck size, power mode, direction,
-load, variant, etc.) - do not just copy the requirement text verbatim.
+step (End_of_test).
+
+Every step needs a Remarks entry that is a short, specific, human-readable
+explanation of WHY that step exists - not a restatement of the step text.
+This is mandatory for every single step, including bare `Wait` steps. Match
+this style (these are illustrative patterns, not literal text to reuse):
+  - Test_start / End_of_test: "Marker used to identify the start/end of the testing"
+  - a precondition Compound verify: "To confirm <the specific initial condition being checked>"
+  - a Set step: "Adjust <the sensor/switch> to <the value>" or "Turn <the switch> to <the state>"
+  - a Wait step: "Time delay is given as <N> ms"
+  - a Lib_* call: one sentence in plain prose describing exactly what the
+    library call does with the specific parameters used (e.g. what it ramps,
+    from/to what, and what condition it checks or waits for)
+A step with a generic, boilerplate, or missing Remarks (e.g. "step" or "set
+value") will be treated as a plausibility issue by the reviewer and sent
+back for correction.
+
+Write a Test Case Description as ONE sentence following this template: "To
+check the <feature> feature, test the truck in <load> condition while moving
+<direction> in <mode/relevant fixed-factor state>. Ensure that <the
+requirement's core expected-behavior claim, in plain language>. For variant
+<variant>." Use the row's actual fixed-factor values and the requirement's
+actual claim - do not copy the requirement text verbatim, and do not omit
+the variant.
 
 Every step referencing a signal, command, compound command, tolerance, or
 library call must use the exact name as it appeared in a tool result -
@@ -251,6 +287,18 @@ Check:
 - The test case starts with Test_start and ends with End_of_test, with
   step numbers continuous and phases in PRECONDITION -> ACTION ->
   POSTCONDITION order.
+- EVERY step has a Remarks entry that specifically explains why that step
+  exists (not generic/boilerplate text, not a restatement of the step
+  itself, not missing/blank) - see the "generate" prompt's Remarks style
+  guidance for what "specific" looks like.
+- If the requirement is about something enabling/turning on as a result of a
+  transition, the test case verifies the disabled state before the
+  transition as well as the enabled state after - not just the end state.
+- If the requirement claims one state "achieves equivalent performance to"
+  or "acts like" another named state, the test case verifies both sides of
+  that claim, not just the state actually under test.
+- The Test Case Description follows the standard template (see the
+  "generate" prompt) and actually reflects this row's real factor values.
 
 You are not responsible for checking requirement fidelity (a different
 reviewer covers that) or for whether referenced names exist (checked
@@ -289,6 +337,18 @@ physically sensible vehicle test?
 - The test case starts with Test_start and ends with End_of_test, with step
   numbers continuous and phases in PRECONDITION -> ACTION -> POSTCONDITION
   order.
+- EVERY step has a Remarks entry that specifically explains why that step
+  exists (not generic/boilerplate text, not a restatement of the step
+  itself, not missing/blank) - see the "generate" prompt's Remarks style
+  guidance for what "specific" looks like.
+- If the requirement is about something enabling/turning on as a result of a
+  transition, the test case verifies the disabled state before the
+  transition as well as the enabled state after - not just the end state.
+- If the requirement claims one state "achieves equivalent performance to"
+  or "acts like" another named state, the test case verifies both sides of
+  that claim, not just the state actually under test.
+- The Test Case Description follows the standard template (see the
+  "generate" prompt) and actually reflects this row's real factor values.
 
 Neither rubric is responsible for checking whether referenced names exist
 (checked separately, deterministically). For each rubric, return pass=true
