@@ -1,6 +1,7 @@
 """Hybrid node: valid Master Input Output Signal rows for this feature."""
 from __future__ import annotations
 
+from .. import excel_io
 from ._marker_extract import extract_valid_rows
 from ..logging_utils import get_logger, stage_timer
 from ..schema import IOSignal
@@ -10,6 +11,14 @@ from ..workbook_store import InMemoryWorkbookStore
 _logger = get_logger(__name__)
 
 
+def _s(row: dict, key: str) -> str | None:
+    """Normalize a raw cell value to str|None before it reaches a pydantic
+    model - see app_param_extract.py's `_s` for why this is needed (a
+    numeric-looking cell, e.g. a numeric Signal ID, reads as int/float and
+    IOSignal's fields are plain `str`, which pydantic v2 won't coerce)."""
+    return excel_io._norm(row.get(key)) or None
+
+
 def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
     def node(state: PipelineState) -> PipelineState:
         feature_id = state["feature_id"]
@@ -17,12 +26,12 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
             rows = extract_valid_rows(store, "io_signal", feature_id, llm, tools, pipeline_config)
             signals = [
                 IOSignal(
-                    signal_id=row.get("Signal ID"),
-                    logical_signal_name=row.get("Logical Signal Name"),
-                    signal_type=row.get("Signal Type"),
-                    variants=row.get("Variants"),
-                    ecu=row.get("ECU"),
-                    input_output=row.get("Input/Output"),
+                    signal_id=_s(row, "Signal ID"),
+                    logical_signal_name=_s(row, "Logical Signal Name"),
+                    signal_type=_s(row, "Signal Type"),
+                    variants=_s(row, "Variants"),
+                    ecu=_s(row, "ECU"),
+                    input_output=_s(row, "Input/Output"),
                 )
                 for row in rows
             ]
