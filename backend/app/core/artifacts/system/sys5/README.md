@@ -453,3 +453,34 @@ dry run of the pipeline (not just static review)**:
    `tests/test_master_sheet_extract_nodes.py`, which feeds literal Python
    `int`/`float` values (mirroring real openpyxl output) through each node
    directly to reproduce the exact reported crash.
+
+5. **`test_pattern_gen` never completing** (reported as "takes a long long
+   time even for a single requirement… execution has never moved forward
+   past this part", after an earlier report of request timeouts on the same
+   stage). Not a prompt-size or model-speed problem: `ChatOpenAI`'s
+   `with_structured_output` defaults to `method="json_schema"`, which sends
+   the pydantic schema as a strict `response_format` - and a self-hosted
+   backend (this deployment's vLLM behind litellm) compiles that schema into
+   a **grammar for guided decoding**. `_ScenarioPlan` had two `dict[...]`
+   fields, which pydantic renders as `{"type": "object",
+   "additionalProperties": {...}}` with no fixed `properties` - objects with
+   *arbitrary* keys, i.e. an effectively unbounded grammar. Dumping every
+   structured-output schema in the pipeline and counting
+   `additionalProperties` gave an exact fingerprint: `test_pattern_gen` was
+   the **only** schema with open-ended maps, and the only stage that never
+   completed - every other stage's schema is fully closed and every other
+   stage ran fine. Fixed by closing the schema: `variable_transitions` and
+   `excluded_fixed_factor_values` are now lists of fixed-key objects
+   (`_FactorTransition`, `_ExcludedValues`) that `_expand` converts back to
+   dicts internally, so the wire schema is bounded and the stored
+   `TestPatternRow` shape is unchanged. **Keep every structured-output
+   schema in this codebase closed** - no bare `dict`/`Any`-keyed fields -
+   or this comes straight back.
+
+   Two opt-in levers were added alongside it, both default-off so nothing
+   changes silently: `pipeline_config.structured_output_method` (switch to
+   `"function_calling"` if a backend build handles `json_schema` badly) and
+   `pipeline_config.llm_reasoning_effort` (send OpenAI's `reasoning_effort`
+   - `"low"` trades planning depth for a large wall-clock win on a reasoning
+   model like gpt-oss). `call_llm()` also now logs each call's wall-clock at
+   INFO, so `sys5_run.log` shows exactly which call is slow.

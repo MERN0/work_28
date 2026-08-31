@@ -83,6 +83,15 @@ def get_llm(pipeline_config: PipelineConfig, model: str | None = None) -> ChatOp
         a plain LangChain chat model that `agents.py` wraps with tool-calling
         and structured-output behavior.
     """
+    optional: dict = {}
+    if pipeline_config.llm_reasoning_effort:
+        # Only sent when explicitly configured - see pipeline_config.py. A
+        # reasoning model (this deployment's gpt-oss-120b) can spend far more
+        # time on analysis tokens than on the small answers these stages ask
+        # for; "low" is the lever for that, but it changes planning depth, so
+        # it is never applied silently.
+        optional["reasoning_effort"] = pipeline_config.llm_reasoning_effort
+
     return ChatOpenAI(
         model=model or pipeline_config.llm_model,
         api_key=pipeline_config.llm_api_key,
@@ -92,4 +101,5 @@ def get_llm(pipeline_config: PipelineConfig, model: str | None = None) -> ChatOp
         timeout=pipeline_config.llm_timeout_seconds,
         output_version=pipeline_config.llm_output_version,
         use_responses_api=False,
+        **optional,
     )

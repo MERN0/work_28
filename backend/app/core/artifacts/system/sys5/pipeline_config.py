@@ -38,9 +38,27 @@ class PipelineConfig:
     # than a classification) - raised to 300s. Override per-run without a
     # code change via the SYS5_LLM_TIMEOUT env var if 300s still isn't enough.
     llm_timeout_seconds: int = 300
-    # Retries for the (fallback, non-native) structured-output shaping call -
-    # see agents.py. Separate from llm_max_retries, which is HTTP-level retry.
+    # Retries for a structured-output call whose answer fails pydantic
+    # validation - see agents.py. Separate from llm_max_retries (HTTP-level).
     structured_output_max_retries: int = 2
+    # How `llm.with_structured_output()` asks for a typed answer:
+    # - "json_schema" (langchain-openai's default for ChatOpenAI): sends the
+    #   schema as a strict `response_format`. A self-hosted backend (vLLM)
+    #   compiles it into a grammar for guided decoding - fast for a closed
+    #   schema, pathological for one with open-ended `additionalProperties`
+    #   maps (see nodes/test_pattern_gen.py's docstring; every schema in this
+    #   pipeline is deliberately kept closed for this reason).
+    # - "function_calling": the older approach - binds one synthetic tool and
+    #   forces tool_choice. Switch to this if a particular backend build
+    #   handles json_schema poorly.
+    structured_output_method: str = "json_schema"
+    # gpt-oss (and other reasoning models) accept an OpenAI `reasoning_effort`
+    # ("low"/"medium"/"high"). Left None by default = don't send it, so the
+    # model's own default applies and nothing changes silently. Set "low" if
+    # you want to trade some planning depth for a large wall-clock win - a
+    # reasoning model can spend far longer on analysis tokens than on the
+    # (small) answer these stages actually ask for.
+    llm_reasoning_effort: str | None = None
     # `ChatOpenAI(output_version=...)` - "v0" keeps AIMessage.content a plain
     # string (langchain-openai's pre-1.0 format) instead of the >=1.0 default
     # ("responses/v1"), a list of typed content blocks. The SYS5 endpoint is

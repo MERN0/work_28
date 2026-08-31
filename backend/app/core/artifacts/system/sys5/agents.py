@@ -93,7 +93,8 @@ def call_llm(
         A validated `output_schema` instance.
     """
     max_retries = pipeline_config.structured_output_max_retries if pipeline_config else 2
-    structured_llm = llm.with_structured_output(output_schema)
+    method = pipeline_config.structured_output_method if pipeline_config else "json_schema"
+    structured_llm = llm.with_structured_output(output_schema, method=method)
 
     messages = [SystemMessage(system_prompt), HumanMessage(user_input)]
     last_error: Exception | None = None
@@ -103,7 +104,9 @@ def call_llm(
         try:
             result = structured_llm.invoke(messages)
             parsed = result if isinstance(result, output_schema) else output_schema.model_validate(result)
-            _logger.debug(
+            # INFO, not DEBUG: per-call wall-clock is the first thing you want
+            # in sys5_run.log when a run feels slow or looks stuck.
+            _logger.info(
                 "call_llm(%s) succeeded on attempt %d/%d in %.1fs",
                 output_schema.__name__, attempt + 1, max_retries + 1, time.monotonic() - started,
             )

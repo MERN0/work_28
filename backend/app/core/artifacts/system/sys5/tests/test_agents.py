@@ -29,8 +29,10 @@ class _FakeStructurer:
 class _FakeLLM:
     def __init__(self, responses):
         self._responses = responses
+        self.methods_used: list[str] = []
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, method=None):
+        self.methods_used.append(method)
         return _FakeStructurer(self._responses)
 
 
@@ -63,3 +65,19 @@ def test_call_llm_defaults_to_two_retries_without_pipeline_config():
     ])
     result = agents.call_llm(llm, "system", "user", _Out)
     assert result.value == "third-try"
+
+
+def test_call_llm_honors_configured_structured_output_method():
+    """The method is a real lever: "json_schema" makes a self-hosted backend
+    compile the schema into a decoding grammar, "function_calling" doesn't -
+    see pipeline_config.py. It must actually reach with_structured_output."""
+    llm = _FakeLLM([_Out(value="ok")])
+    agents.call_llm(llm, "system", "user", _Out, pipeline_config=PipelineConfig())
+    assert llm.methods_used == ["json_schema"]  # the shipped default
+
+    llm = _FakeLLM([_Out(value="ok")])
+    agents.call_llm(
+        llm, "system", "user", _Out,
+        pipeline_config=PipelineConfig(structured_output_method="function_calling"),
+    )
+    assert llm.methods_used == ["function_calling"]

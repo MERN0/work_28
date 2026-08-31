@@ -6,6 +6,8 @@
   "llm_max_retries": 3,
   "llm_timeout_seconds": 300,
   "structured_output_max_retries": 2,
+  "structured_output_method": "json_schema",
+  "llm_reasoning_effort": null,
   "llm_output_version": "v0",
 
   "header_row_match_threshold": 75,

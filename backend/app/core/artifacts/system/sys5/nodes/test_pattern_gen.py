@@ -2,7 +2,26 @@
 
 The LLM identifies the distinct testable scenarios in Verification Criteria
 and which fixed factors/values apply to each; Python then does the actual
-combinatorial expansion (mechanical, not a judgment call).
+combinatorial expansion (mechanical, not a judgment call). One LLM call per
+requirement - the model only emits a small plan object, never the expanded
+rows themselves.
+
+## Why the plan schema uses lists of pairs, not dicts
+
+`ChatOpenAI.with_structured_output` defaults to `method="json_schema"`, which
+sends the schema as a strict `response_format` - and a self-hosted backend
+(this deployment's vLLM behind litellm) compiles that schema into a grammar
+for guided decoding. A pydantic `dict[str, str]` field becomes
+`{"type": "object", "additionalProperties": {...}}` with no fixed
+`properties`: an object with *arbitrary* keys, i.e. an effectively unbounded
+grammar. That is pathological for constrained decoding - it made this stage
+take minutes-to-never against the real endpoint while every other stage
+(whose schemas are all fully closed) completed normally.
+
+So every field here stays closed: a list of objects with fixed keys instead
+of a map with free-form keys. `_expand` converts them back into the dicts
+`TestPatternRow` actually stores, which costs nothing and keeps the wire
+schema bounded.
 """
 from __future__ import annotations
 
@@ -21,11 +40,28 @@ from ..workbook_store import InMemoryWorkbookStore
 _logger = get_logger(__name__)
 
 
+class _FactorTransition(BaseModel):
+    factor_name: str = Field(description="Exact name of one of the feature's variable factors.")
+    transition: str = Field(description="The transition under test for that factor, e.g. '0 deg -> 3 deg'.")
+
+
+class _ExcludedValues(BaseModel):
+    factor_name: str = Field(description="Exact name of one of the feature's fixed factors.")
+    excluded_values: list[str] = Field(description="Values of that factor to leave OUT of the combinatorial sweep.")
+
+
 class _ScenarioPlan(BaseModel):
-    scenario_id: str
-    variable_transitions: dict[str, str]           # factor name -> "A -> B"
-    applicable_fixed_factor_names: list[str]         # subset of the feature's fixed factor names
-    excluded_fixed_factor_values: dict[str, list[str]] = Field(default_factory=dict)  # factor name -> values to exclude
+    scenario_id: str = Field(description="Short identifier for this scenario, e.g. 'slope_0_to_3_enabled'.")
+    variable_transitions: list[_FactorTransition] = Field(
+        description="One entry per variable factor this scenario exercises."
+    )
+    applicable_fixed_factor_names: list[str] = Field(
+        description="Exact names of the fixed factors that apply to this scenario (these get swept combinatorially)."
+    )
+    excluded_fixed_factor_values: list[_ExcludedValues] = Field(
+        default_factory=list,
+        description="Optional. Only for fixed-factor values this requirement explicitly rules out.",
+    )
 
 
 class _PatternPlan(BaseModel):
@@ -37,9 +73,11 @@ def _expand(plan: _PatternPlan, table: FactorTable) -> list[TestPatternRow]:
     counter = 1
     fixed_by_name = {f.name: f for f in table.fixed_factors}
     for scenario in plan.scenarios:
+        excluded = {e.factor_name: e.excluded_values for e in scenario.excluded_fixed_factor_values}
+        transitions = {t.factor_name: t.transition for t in scenario.variable_transitions}
         chosen = [fixed_by_name[name] for name in scenario.applicable_fixed_factor_names if name in fixed_by_name]
         value_lists = [
-            [v for v in factor.values if v not in scenario.excluded_fixed_factor_values.get(factor.name, [])]
+            [v for v in factor.values if v not in excluded.get(factor.name, [])]
             for factor in chosen
         ]
         combos = list(itertools.product(*value_lists)) if value_lists else [()]
@@ -49,7 +87,7 @@ def _expand(plan: _PatternPlan, table: FactorTable) -> list[TestPatternRow]:
                     test_case_no=counter,
                     scenario_id=scenario.scenario_id,
                     fixed_values=dict(zip([f.name for f in chosen], combo)),
-                    variable_transitions=dict(scenario.variable_transitions),
+                    variable_transitions=dict(transitions),
                 )
             )
             counter += 1

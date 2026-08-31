@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from ..factors import get_factor_table
-from ..nodes.test_pattern_gen import _PatternPlan, _ScenarioPlan, _expand
+from ..nodes.test_pattern_gen import (
+    _ExcludedValues,
+    _FactorTransition,
+    _PatternPlan,
+    _ScenarioPlan,
+    _expand,
+)
 
 
 def test_expand_combines_only_applicable_fixed_factors():
@@ -10,7 +16,10 @@ def test_expand_combines_only_applicable_fixed_factors():
         scenarios=[
             _ScenarioPlan(
                 scenario_id="enable-on-slope",
-                variable_transitions={"Option Set": "Disabled -> Enabled", "Slope angle": "0 deg -> 3 deg"},
+                variable_transitions=[
+                    _FactorTransition(factor_name="Option Set", transition="Disabled -> Enabled"),
+                    _FactorTransition(factor_name="Slope angle", transition="0 deg -> 3 deg"),
+                ],
                 applicable_fixed_factor_names=["Truck Size", "Power Control Mode", "Direction Switch", "Load Capacity"],
             )
         ]
@@ -29,9 +38,11 @@ def test_expand_respects_excluded_values():
         scenarios=[
             _ScenarioPlan(
                 scenario_id="fwd-only",
-                variable_transitions={"Option Set": "Disabled -> Enabled"},
+                variable_transitions=[_FactorTransition(factor_name="Option Set", transition="Disabled -> Enabled")],
                 applicable_fixed_factor_names=["Direction Switch"],
-                excluded_fixed_factor_values={"Direction Switch": ["BWD"]},
+                excluded_fixed_factor_values=[
+                    _ExcludedValues(factor_name="Direction Switch", excluded_values=["BWD"])
+                ],
             )
         ]
     )
@@ -44,8 +55,8 @@ def test_expand_concatenates_multiple_scenarios_with_running_counter():
     table = get_factor_table("002")
     plan = _PatternPlan(
         scenarios=[
-            _ScenarioPlan(scenario_id="s1", variable_transitions={}, applicable_fixed_factor_names=["Direction Switch"]),
-            _ScenarioPlan(scenario_id="s2", variable_transitions={}, applicable_fixed_factor_names=["Load Capacity"]),
+            _ScenarioPlan(scenario_id="s1", variable_transitions=[], applicable_fixed_factor_names=["Direction Switch"]),
+            _ScenarioPlan(scenario_id="s2", variable_transitions=[], applicable_fixed_factor_names=["Load Capacity"]),
         ]
     )
     rows = _expand(plan, table)
