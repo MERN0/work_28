@@ -1,9 +1,41 @@
-"""Outer StateGraph (per-feature pipeline) and inner per-test-case subgraph
-(the validation/correction loop, plan §E), plus run_pipeline() which wires
-everything together for sys5.py's entry point.
+"""Builds and wires the two LangGraph `StateGraph`s this pipeline runs, and
+`run_pipeline()`, the top-level function `sys5.generate()` calls.
 
-No checkpointer is wired up (plan Fix 9): generate() is a single synchronous
-call with no pause/resume requirement.
+If you're new to this file: read README.md's §3-§5 first (the plain-language
+walkthrough with a diagram) - this docstring is the LangGraph-API-level
+detail underneath that, not a replacement for it.
+
+## The two graphs
+
+- **Outer graph** (`_build_outer_graph`): one node per pipeline stage
+  (feature lookup, extraction, test-pattern generation, ...), wired as a
+  fixed linear sequence via `add_edge` - no branching at this level. State
+  type is `state.PipelineState`.
+- **Inner graph** (`_build_inner_test_case_graph`): the per-test-case
+  generate → hallucination-check → validate → (maybe correct) → finalize
+  loop, invoked once per test-pattern row by the outer graph's
+  `test_case_loop` node (`nodes/test_case_loop.py`). State type is
+  `state.TestCaseState`. This is the one graph in this codebase with actual
+  branching, via `add_conditional_edges` - see `route_after_hallucination`/
+  `route_after_pass2` below.
+
+Both are built with `langgraph.graph.StateGraph`
+(https://reference.langchain.com/python/langgraph/graph/state/StateGraph):
+`add_node(name, fn)` registers a `State -> Partial[State]` function,
+`add_edge(a, b)` is an unconditional transition, `set_entry_point(name)`
+marks the start, and `.compile()` turns the builder into something
+`.invoke(initial_state)`-able. Conditional branching uses
+`add_conditional_edges(node, routing_fn, mapping)`
+(https://docs.langchain.com/oss/python/langgraph/graph-api#conditional-edges):
+`routing_fn(state)` returns a key, and `mapping[key]` is the node actually
+transitioned to - which is why `route_after_hallucination` can return the
+string `"validate_pass1"` even in combined-validation mode, where the real
+destination node is named `"validate"` (see the two `add_conditional_edges`
+calls below - the mapping dict is what actually decides the node name).
+
+No checkpointer is configured on either graph - `generate()` is a single
+synchronous call with no pause/resume requirement, so there's nothing to
+checkpoint against.
 """
 from __future__ import annotations
 
@@ -33,7 +65,7 @@ from .nodes import (
     validate,
 )
 from .pipeline_config import PipelineConfig
-from .schema import Requirement
+from .schema import Requirement, format_heading_info
 from .state import PipelineState, TestCaseState
 from .tools import build_tools
 from .workbook_store import InMemoryWorkbookStore
@@ -107,12 +139,20 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list,
 
 
 def _context_builder(state: PipelineState, req: Requirement) -> dict:
+    """Assembles the per-test-case `context` dict passed into the inner
+    subgraph's initial `TestCaseState` (see `nodes/test_case_loop.py`) -
+    everything `nodes/generate.py` needs beyond the requirement and pattern
+    row themselves. Includes `heading_info` (formatted via
+    `schema.format_heading_info`) so a requirement's surrounding
+    Heading/Information rows are available as background context to the
+    `generate` agent, not just computed and discarded."""
     selections = state.get("compound_selections", {}).get(req.req_id, {})
     return {
         "feature_name": state.get("feature_name", ""),
         "factor_signal_resolutions": state.get("factor_signal_resolutions", {}),
         "compound_commands": selections.get("compound_commands", []),
         "library_calls": selections.get("library_calls", []),
+        "heading_info": format_heading_info(state.get("heading_info", [])),
     }
 
 

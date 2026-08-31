@@ -14,7 +14,7 @@ from ..agents import run_agent_with_structured_output
 from ..factors import get_factor_table
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
-from ..schema import FactorTable, Requirement, TestPatternRow
+from ..schema import FactorTable, Requirement, TestPatternRow, format_heading_info
 from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
 
@@ -63,6 +63,7 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
 
         fixed_desc = "\n".join(f"- {f.name}: {f.values}" for f in table.fixed_factors)
         variable_desc = "\n".join(f"- {f.name}: {f.values}" for f in table.variable_factors)
+        heading_context = format_heading_info(state.get("heading_info", []))
 
         for req in state["requirements"]:
             with stage_timer(_logger, "test_pattern_gen", req=req.req_id):
@@ -73,6 +74,9 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
                     f"Variant: {req.variant}\n\n"
                     f"Feature's fixed factors (combine combinatorially):\n{fixed_desc}\n\n"
                     f"Feature's variable factors (the transitions actually under test):\n{variable_desc}"
+                    + (f"\n\nBackground context from Heading/Information rows on the requirement "
+                       f"sheet (not requirements themselves, but may clarify intent):\n{heading_context}"
+                       if heading_context else "")
                 )
                 result, _ = run_agent_with_structured_output(
                     llm, tools, prompt, user_input, _PatternPlan, pipeline_config=pipeline_config

@@ -1,10 +1,27 @@
-"""Agent-facing tools: thin, read-only wrappers around an InMemoryWorkbookStore
-instance. Built per pipeline run via build_tools(store) so each run's agents
+"""Agent-facing tools: thin, read-only wrappers around an `InMemoryWorkbookStore`
+instance. Built per pipeline run via `build_tools(store)` so each run's agents
 query that run's own parsed data, never global state.
 
 These tools are the *only* way an agent sees source data - they never
 fabricate or complete a value, they only ever return what was literally
 parsed off a sheet (see workbook_store.py / excel_io.py).
+
+## Why `StructuredTool.from_function` and not the `@tool` decorator
+
+LangChain's docs recommend `@tool` as "the simplest way to create a tool"
+(https://docs.langchain.com/oss/python/langchain/tools#basic-tool-definition)
+- but that's for a tool that's a static, top-level function known at import
+time. Every tool here is a closure over one run's `store` (and, for the
+retrieval tools, that run's `pipeline_config` shortlist-size defaults) -
+built fresh inside `build_tools()` for each pipeline run, not defined once at
+module load. `StructuredTool.from_function(func=fn, name=name)`
+(https://reference.langchain.com/python/langchain-core/tools/structured/StructuredTool/from_function)
+is the documented mechanism for exactly this: wrapping an already-existing
+callable (here, a closure) into a `BaseTool` LangChain can bind to a model,
+inferring the argument schema from the function's type hints and the tool's
+description from its docstring - the same schema/description inference
+`@tool` does, just applied to a function built at call time instead of
+decorator time.
 """
 from __future__ import annotations
 

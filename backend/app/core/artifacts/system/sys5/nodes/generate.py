@@ -32,6 +32,12 @@ def _build_user_input(state: TestCaseState) -> str:
         f"{context.get('factor_signal_resolutions', {})}\n\n"
         f"Selected compound commands for this requirement: {context.get('compound_commands', [])}\n"
         f"Selected library calls for this requirement: {context.get('library_calls', [])}\n"
+        + (
+            f"\nBackground context from Heading/Information rows on the requirement sheet "
+            f"(not requirements themselves, but may clarify intent):\n{context['heading_info']}\n"
+            if context.get("heading_info")
+            else ""
+        )
     )
 
 

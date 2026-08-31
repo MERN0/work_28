@@ -23,7 +23,6 @@ from .schema import (
     CommandListEntry,
     CompoundCommand,
     CompoundCommandStep,
-    CustomKeywordEntry,
     LibraryEntry,
     ModelInputMappingRow,
     ToleranceEntry,
@@ -176,7 +175,6 @@ class InMemoryWorkbookStore:
     model_input_mapping: list[ModelInputMappingRow] = field(default_factory=list)
     compound_commands: dict[str, CompoundCommand] = field(default_factory=dict)
     library_entries: list[LibraryEntry] = field(default_factory=list)
-    custom_keywords: list[CustomKeywordEntry] = field(default_factory=list)
 
     @classmethod
     def load(
@@ -217,83 +215,93 @@ class InMemoryWorkbookStore:
     def _resolve_columns(self, headers: list[Any], candidates: list[str]) -> dict[str, Optional[int]]:
         return excel_io.resolve_columns(headers, candidates, threshold=self.pipeline_config.column_match_threshold)
 
+    def _load_sheet(
+        self, wb, candidates: list[str], anchors: list[str]
+    ) -> Optional[tuple[list[list[Any]], int, list[Any]]]:
+        """Find a sheet by name (fuzzy) and its header row (fuzzy, falling
+        back to row 0 if nothing scores well against `anchors` - a sheet
+        that exists but whose header couldn't be confidently located is
+        still worth reading on a best-effort basis, rather than silently
+        contributing zero rows). Returns `(matrix, header_row_index,
+        header_row_values)`, or `None` only if the sheet itself isn't found
+        at all.
+
+        Every `_load_*` method below needs exactly this sequence
+        (`_find_sheet` -> `excel_io.sheet_matrix` -> `_find_header_row`) for
+        each sheet it reads - this is the one place that logic lives, so
+        each caller is left with just its own field mapping / row-to-model
+        construction, which is the part that's actually specific to that sheet.
+        """
+        ws = self._find_sheet(wb, *candidates)
+        if ws is None:
+            return None
+        matrix = excel_io.sheet_matrix(ws)
+        header_row = self._find_header_row(matrix, anchors) or 0
+        headers = matrix[header_row] if header_row < len(matrix) else []
+        return matrix, header_row, headers
+
     # -- Requirements workbook -------------------------------------------------
 
     def _load_requirements_workbook(self, req_sheet_name: str) -> None:
         wb = excel_io.load_workbook(self.file_paths["requirements"])
 
-        index_ws = self._find_sheet(wb, "Index")
-        if index_ws is not None:
-            matrix = excel_io.sheet_matrix(index_ws)
-            header_row = self._find_header_row(matrix, ["Feature ID Link", "Feature Name", "Function Group"])
-            if header_row is not None:
-                col_map = self._resolve_columns(matrix[header_row], ["Feature ID Link", "Feature Name", "Function Group"])
-                for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
-                    fid = excel_io.normalize_feature_id(row.get("Feature ID Link"))
-                    if fid:
-                        self.feature_index[fid] = {
-                            "name": excel_io._norm(row.get("Feature Name")),
-                            "function_group": excel_io._norm(row.get("Function Group")),
-                        }
+        loaded = self._load_sheet(wb, ["Index"], ["Feature ID Link", "Feature Name", "Function Group"])
+        if loaded:
+            matrix, header_row, headers = loaded
+            col_map = self._resolve_columns(headers, ["Feature ID Link", "Feature Name", "Function Group"])
+            for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
+                fid = excel_io.normalize_feature_id(row.get("Feature ID Link"))
+                if fid:
+                    self.feature_index[fid] = {
+                        "name": excel_io._norm(row.get("Feature Name")),
+                        "function_group": excel_io._norm(row.get("Function Group")),
+                    }
 
-        abbr_ws = self._find_sheet(wb, "Master List Abbreviations", "Master List - Abbreviations")
-        if abbr_ws is not None:
-            matrix = excel_io.sheet_matrix(abbr_ws)
-            header_row = self._find_header_row(matrix, ["Abbreviations", "Description/Definition"])
-            if header_row is not None:
-                col_map = self._resolve_columns(matrix[header_row], ["Abbreviations", "Description/Definition"])
-                for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
-                    abbr = excel_io._norm(row.get("Abbreviations"))
-                    if abbr:
-                        self.abbreviations.append(
-                            AbbreviationEntry(abbreviation=abbr, definition=excel_io._norm(row.get("Description/Definition")))
-                        )
+        loaded = self._load_sheet(
+            wb, ["Master List Abbreviations", "Master List - Abbreviations"], ["Abbreviations", "Description/Definition"]
+        )
+        if loaded:
+            matrix, header_row, headers = loaded
+            col_map = self._resolve_columns(headers, ["Abbreviations", "Description/Definition"])
+            for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
+                abbr = excel_io._norm(row.get("Abbreviations"))
+                if abbr:
+                    self.abbreviations.append(
+                        AbbreviationEntry(abbreviation=abbr, definition=excel_io._norm(row.get("Description/Definition")))
+                    )
 
-        req_ws = self._find_sheet(wb, req_sheet_name)
-        if req_ws is not None:
-            self.requirement_matrix = excel_io.sheet_matrix(req_ws)
-            self.requirement_header_row = self._find_header_row(
-                self.requirement_matrix, ["Requirement ID", "Requirement Description", "Category"]
-            ) or 0
-            self.requirement_headers = self.requirement_matrix[self.requirement_header_row]
+        loaded = self._load_sheet(wb, [req_sheet_name], ["Requirement ID", "Requirement Description", "Category"])
+        if loaded:
+            self.requirement_matrix, self.requirement_header_row, self.requirement_headers = loaded
 
-        comm_ws = self._find_sheet(wb, "Master Comm Matrix (CAN)", "Master Comm Matrix")
-        if comm_ws is not None:
-            self.comm_matrix_matrix = excel_io.sheet_matrix(comm_ws)
-            self.comm_matrix_header_row = self._find_header_row(
-                self.comm_matrix_matrix, ["Signal ID", "Signal name", "Message Name"]
-            ) or 0
-            self.comm_matrix_headers = self.comm_matrix_matrix[self.comm_matrix_header_row]
+        loaded = self._load_sheet(
+            wb, ["Master Comm Matrix (CAN)", "Master Comm Matrix"], ["Signal ID", "Signal name", "Message Name"]
+        )
+        if loaded:
+            self.comm_matrix_matrix, self.comm_matrix_header_row, self.comm_matrix_headers = loaded
 
-        param_ws = self._find_sheet(wb, "Master List - App Parameter", "Master List App Parameter")
-        if param_ws is not None:
-            self.app_param_matrix = excel_io.sheet_matrix(param_ws)
-            self.app_param_header_row = self._find_header_row(
-                self.app_param_matrix, ["Parameter ID", "Parameter Name", "Parameter Type"]
-            ) or 0
-            self.app_param_headers = self.app_param_matrix[self.app_param_header_row]
+        loaded = self._load_sheet(
+            wb, ["Master List - App Parameter", "Master List App Parameter"], ["Parameter ID", "Parameter Name", "Parameter Type"]
+        )
+        if loaded:
+            self.app_param_matrix, self.app_param_header_row, self.app_param_headers = loaded
 
-        io_ws = self._find_sheet(wb, "Master Input Output Signals")
-        if io_ws is not None:
-            self.io_signal_matrix = excel_io.sheet_matrix(io_ws)
-            self.io_signal_header_row = self._find_header_row(
-                self.io_signal_matrix, ["Signal ID", "Logical Signal Name", "Signal Type"]
-            ) or 0
-            self.io_signal_headers = self.io_signal_matrix[self.io_signal_header_row]
+        loaded = self._load_sheet(
+            wb, ["Master Input Output Signals"], ["Signal ID", "Logical Signal Name", "Signal Type"]
+        )
+        if loaded:
+            self.io_signal_matrix, self.io_signal_header_row, self.io_signal_headers = loaded
 
     # -- Command List / Configuration workbooks --------------------------------
 
     def _load_command_list(self) -> None:
         wb = excel_io.load_workbook(self.file_paths["command_list"])
-        ws = self._find_sheet(wb, "Command List")
-        if ws is None:
+        loaded = self._load_sheet(wb, ["Command List"], ["Command name", "Signal Name", "Message Name"])
+        if not loaded:
             return
-        matrix = excel_io.sheet_matrix(ws)
-        header_row = self._find_header_row(matrix, ["Command name", "Signal Name", "Message Name"])
-        if header_row is None:
-            return
+        matrix, header_row, headers = loaded
         col_map = self._resolve_columns(
-            matrix[header_row], ["Type", "Command name", "Message Name", "Signal Description", "Signal Name"]
+            headers, ["Type", "Command name", "Message Name", "Signal Description", "Signal Name"]
         )
         for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
             name = excel_io._norm(row.get("Command name"))
@@ -312,58 +320,58 @@ class InMemoryWorkbookStore:
     def _load_configuration(self) -> None:
         wb = excel_io.load_workbook(self.file_paths["configuration"])
 
-        tol_ws = self._find_sheet(wb, "Tolerances")
-        if tol_ws is not None:
-            matrix = excel_io.sheet_matrix(tol_ws)
-            header_row = self._find_header_row(matrix, ["Tolerance Configuration", "Value (+,-)", "Tolerance Unit"])
-            if header_row is not None:
-                col_map = self._resolve_columns(
-                    matrix[header_row],
-                    ["Tolerance Configuration", "Description", "Unit", "Value (+,-)", "Tolerance Unit", "Remarks"],
-                )
-                for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
-                    name = excel_io._norm(row.get("Tolerance Configuration"))
-                    if not name:
-                        continue
-                    value = excel_io._norm(row.get("Value (+,-)"))
-                    pos, _, neg = value.partition(",")
-                    self.tolerances.append(
-                        ToleranceEntry(
-                            tolerance_configuration=name,
-                            description=excel_io._norm(row.get("Description")) or None,
-                            unit=excel_io._norm(row.get("Unit")) or None,
-                            value_positive=pos.strip() or None,
-                            value_negative=neg.strip() or None,
-                            tolerance_unit=excel_io._norm(row.get("Tolerance Unit")) or None,
-                            remarks=excel_io._norm(row.get("Remarks")) or None,
-                        )
+        loaded = self._load_sheet(wb, ["Tolerances"], ["Tolerance Configuration", "Value (+,-)", "Tolerance Unit"])
+        if loaded:
+            matrix, header_row, headers = loaded
+            col_map = self._resolve_columns(
+                headers, ["Tolerance Configuration", "Description", "Unit", "Value (+,-)", "Tolerance Unit", "Remarks"]
+            )
+            for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
+                name = excel_io._norm(row.get("Tolerance Configuration"))
+                if not name:
+                    continue
+                value = excel_io._norm(row.get("Value (+,-)"))
+                pos, _, neg = value.partition(",")
+                self.tolerances.append(
+                    ToleranceEntry(
+                        tolerance_configuration=name,
+                        description=excel_io._norm(row.get("Description")) or None,
+                        unit=excel_io._norm(row.get("Unit")) or None,
+                        value_positive=pos.strip() or None,
+                        value_negative=neg.strip() or None,
+                        tolerance_unit=excel_io._norm(row.get("Tolerance Unit")) or None,
+                        remarks=excel_io._norm(row.get("Remarks")) or None,
                     )
+                )
 
-        mim_ws = self._find_sheet(wb, "Model_Input_Mapping", "Model Input Mapping")
-        if mim_ws is not None:
-            matrix = excel_io.sheet_matrix(mim_ws)
-            header_row = self._find_header_row(matrix, ["Signal", "Test Case Input", "Model Input"])
-            if header_row is not None:
-                col_map = self._resolve_columns(
-                    matrix[header_row], ["Signal", "Test Case Input", "Model Input", "Model Output to ECU", "Remark"]
-                )
-                data_rows = matrix[header_row + 1 :]
-                signal_idx = col_map.get("Signal")
-                if signal_idx is not None:
-                    excel_io.forward_fill_columns(data_rows, [signal_idx])
-                for row in excel_io.rows_as_dicts(data_rows, -1, col_map):
-                    signal = excel_io._norm(row.get("Signal"))
-                    if not signal or excel_io._norm(row.get("Test Case Input")) == "":
-                        continue
-                    self.model_input_mapping.append(
-                        ModelInputMappingRow(
-                            signal=signal,
-                            test_case_input=excel_io._norm(row.get("Test Case Input")) or None,
-                            model_input=excel_io._norm(row.get("Model Input")) or None,
-                            model_output_to_ecu=excel_io._norm(row.get("Model Output to ECU")) or None,
-                            remark=excel_io._norm(row.get("Remark")) or None,
-                        )
+        loaded = self._load_sheet(
+            wb, ["Model_Input_Mapping", "Model Input Mapping"], ["Signal", "Test Case Input", "Model Input"]
+        )
+        if loaded:
+            matrix, header_row, headers = loaded
+            col_map = self._resolve_columns(
+                headers, ["Signal", "Test Case Input", "Model Input", "Model Output to ECU", "Remark"]
+            )
+            # Signal/Sl.No. cells are only populated on the first row of each
+            # signal's block in the real sheet (visually merged in Excel) -
+            # forward_fill_columns propagates them before row-by-row parsing.
+            data_rows = matrix[header_row + 1 :]
+            signal_idx = col_map.get("Signal")
+            if signal_idx is not None:
+                excel_io.forward_fill_columns(data_rows, [signal_idx])
+            for row in excel_io.rows_as_dicts(data_rows, -1, col_map):
+                signal = excel_io._norm(row.get("Signal"))
+                if not signal or excel_io._norm(row.get("Test Case Input")) == "":
+                    continue
+                self.model_input_mapping.append(
+                    ModelInputMappingRow(
+                        signal=signal,
+                        test_case_input=excel_io._norm(row.get("Test Case Input")) or None,
+                        model_input=excel_io._norm(row.get("Model Input")) or None,
+                        model_output_to_ecu=excel_io._norm(row.get("Model Output to ECU")) or None,
+                        remark=excel_io._norm(row.get("Remark")) or None,
                     )
+                )
 
     # -- Compound Commands / Keyword-Library workbooks -------------------------
 
@@ -377,46 +385,33 @@ class InMemoryWorkbookStore:
                 self.compound_commands[cmd.name] = cmd
 
     def _load_keyword_library(self) -> None:
+        """Parses only the `Library List` sheet - the `Custom Keyword&Library
+        Details` sheet (deeper pseudocode-level implementation notes for the
+        same library functions) is intentionally NOT parsed here: nothing in
+        this pipeline consumes it. `search_library_functions` /
+        `get_compound_command_detail` already give agents enough to select
+        and use a library call correctly from the `Library List` sheet's
+        description + example usage alone. If a future prompt needs the
+        deeper pseudocode detail, add a `CustomKeywordEntry` model back to
+        schema.py and a loader here rather than resurrecting unused state."""
         wb = excel_io.load_workbook(self.file_paths["keyword_library"])
 
-        lib_ws = self._find_sheet(wb, "Library List")
-        if lib_ws is not None:
-            matrix = excel_io.sheet_matrix(lib_ws)
-            header_row = self._find_header_row(matrix, ["Library", "Library Description", "Example Usage"])
-            if header_row is not None:
-                col_map = self._resolve_columns(matrix[header_row], ["Library", "Library Description", "Example Usage"])
-                for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
-                    sig = excel_io._norm(row.get("Library"))
-                    if not sig:
-                        continue
-                    self.library_entries.append(
-                        LibraryEntry(
-                            signature=sig,
-                            description=excel_io._norm(row.get("Library Description")) or None,
-                            example_usage=excel_io._norm(row.get("Example Usage")) or None,
-                        )
-                    )
-
-        kw_ws = self._find_sheet(wb, "Custom Keyword&Library Details", "Custom Keyword & Library Details")
-        if kw_ws is not None:
-            matrix = excel_io.sheet_matrix(kw_ws)
-            header_row = self._find_header_row(matrix, ["Format", "Logical Formula / Method", "Example Reference"])
-            if header_row is not None:
-                col_map = self._resolve_columns(
-                    matrix[header_row], ["Format", "Type", "Logical Formula / Method", "Example Reference"]
+        loaded = self._load_sheet(wb, ["Library List"], ["Library", "Library Description", "Example Usage"])
+        if not loaded:
+            return
+        matrix, header_row, headers = loaded
+        col_map = self._resolve_columns(headers, ["Library", "Library Description", "Example Usage"])
+        for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
+            sig = excel_io._norm(row.get("Library"))
+            if not sig:
+                continue
+            self.library_entries.append(
+                LibraryEntry(
+                    signature=sig,
+                    description=excel_io._norm(row.get("Library Description")) or None,
+                    example_usage=excel_io._norm(row.get("Example Usage")) or None,
                 )
-                for row in excel_io.rows_as_dicts(matrix, header_row, col_map):
-                    fmt = excel_io._norm(row.get("Format"))
-                    if not fmt:
-                        continue
-                    self.custom_keywords.append(
-                        CustomKeywordEntry(
-                            format=fmt,
-                            type=excel_io._norm(row.get("Type")) or None,
-                            logical_formula=excel_io._norm(row.get("Logical Formula / Method")) or None,
-                            example=excel_io._norm(row.get("Example Reference")) or None,
-                        )
-                    )
+            )
 
     # -- Query helpers -----------------------------------------------------
 

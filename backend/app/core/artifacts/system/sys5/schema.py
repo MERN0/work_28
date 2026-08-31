@@ -61,6 +61,18 @@ class HeadingInfoRow(BaseModel):
     category: str
 
 
+def format_heading_info(rows: list["HeadingInfoRow"]) -> str:
+    """Render Heading/Information rows as plain text for inclusion in an LLM
+    prompt (see nodes/test_pattern_gen.py and nodes/generate.py) - this is
+    the "queryable ... context" HeadingInfoRow's own docstring promises;
+    without a caller formatting and including it somewhere, the rows would
+    be collected for nothing. Returns "" for an empty list so callers can
+    splice it into an f-string unconditionally."""
+    if not rows:
+        return ""
+    return "\n".join(f"- [{r.category}]{f' ({r.req_id})' if r.req_id else ''} {r.description}" for r in rows)
+
+
 class AbbreviationEntry(BaseModel):
     abbreviation: str
     definition: str
@@ -156,13 +168,6 @@ class LibraryEntry(BaseModel):
     signature: str  # e.g. "Lib_Ramp Signal_Name(Start=X,Stop=X,Step=X,Time=X)"
     description: Optional[str] = None
     example_usage: Optional[str] = None
-
-
-class CustomKeywordEntry(BaseModel):
-    format: str
-    type: Optional[str] = None
-    logical_formula: Optional[str] = None
-    example: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
