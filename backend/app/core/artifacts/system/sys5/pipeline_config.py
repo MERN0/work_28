@@ -29,7 +29,15 @@ class PipelineConfig:
     llm_api_base: str = "http://10.1.2.186:4000"
     llm_temperature: float = 0
     llm_max_retries: int = 3
-    llm_timeout_seconds: int = 120
+    # `ChatOpenAI`'s own HTTP-level retry already retries a slow/failed call
+    # up to llm_max_retries times, each bounded by this timeout - so a call
+    # that *always* times out (not flaky, just genuinely slow) needs a
+    # longer timeout, not more retries. 120s proved too short for
+    # test_pattern_gen against the real gpt-oss-120b proxy (a reasoning
+    # model, first stage to ask for a nontrivial synthesized answer rather
+    # than a classification) - raised to 300s. Override per-run without a
+    # code change via the SYS5_LLM_TIMEOUT env var if 300s still isn't enough.
+    llm_timeout_seconds: int = 300
     # Retries for the (fallback, non-native) structured-output shaping call -
     # see agents.py. Separate from llm_max_retries, which is HTTP-level retry.
     structured_output_max_retries: int = 2
