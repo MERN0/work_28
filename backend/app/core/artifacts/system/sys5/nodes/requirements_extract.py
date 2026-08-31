@@ -13,7 +13,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from .. import excel_io
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
 from ..schema import HeadingInfoRow, Requirement
@@ -59,7 +59,7 @@ def _to_requirement(row: dict) -> Requirement:
     )
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
     threshold = pipeline_config.category_match_threshold if pipeline_config else 95
 
     def node(state: PipelineState) -> PipelineState:
@@ -89,9 +89,7 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
                     "The following requirement-sheet rows have a Category value that didn't cleanly match "
                     f"one of: {_KNOWN_CATEGORIES}. Classify each into exactly one of those values.\n\n{listing}"
                 )
-                result, _ = run_agent_with_structured_output(
-                    llm, tools, prompt, user_input, _ClassificationBatch, pipeline_config=pipeline_config
-                )
+                result = call_llm(llm, prompt, user_input, _ClassificationBatch, pipeline_config=pipeline_config)
                 decided = {c.row_index: c.category for c in result.rows}
                 for i, row in ambiguous:
                     category = decided.get(i)

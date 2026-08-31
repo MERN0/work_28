@@ -21,13 +21,13 @@ def _s(row: dict, key: str) -> str | None:
     return excel_io._norm(row.get(key)) or None
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
     command_match_threshold = pipeline_config.command_match_threshold if pipeline_config else 80
 
     def node(state: PipelineState) -> PipelineState:
         feature_id = state["feature_id"]
         with stage_timer(_logger, "comm_matrix_extract", feature_id=feature_id):
-            rows = extract_valid_rows(store, "comm_matrix", feature_id, llm, tools, pipeline_config)
+            rows = extract_valid_rows(store, "comm_matrix", feature_id, llm, pipeline_config)
 
             signals: list[CommMatrixSignal] = []
             for row in rows:

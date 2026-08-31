@@ -10,7 +10,7 @@ import itertools
 
 from pydantic import BaseModel, Field
 
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..factors import get_factor_table
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
@@ -56,7 +56,7 @@ def _expand(plan: _PatternPlan, table: FactorTable) -> list[TestPatternRow]:
     return rows
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
     def node(state: PipelineState) -> PipelineState:
         table = get_factor_table(state["feature_id"])
         patterns: dict[str, list[TestPatternRow]] = {}
@@ -78,9 +78,7 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
                        f"sheet (not requirements themselves, but may clarify intent):\n{heading_context}"
                        if heading_context else "")
                 )
-                result, _ = run_agent_with_structured_output(
-                    llm, tools, prompt, user_input, _PatternPlan, pipeline_config=pipeline_config
-                )
+                result = call_llm(llm, prompt, user_input, _PatternPlan, pipeline_config=pipeline_config)
                 patterns[req.req_id] = _expand(result, table)
                 _logger.info("test_pattern_gen: req=%s -> %d test-pattern row(s)", req.req_id, len(patterns[req.req_id]))
 

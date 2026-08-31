@@ -1,9 +1,22 @@
-"""Inner subgraph node: write one test case for one test-pattern row."""
+"""Inner subgraph node: write one test case for one test-pattern row.
+
+All context this stage's LLM call needs (valid signals, tolerances, the
+already-selected compound commands' full step detail, the already-selected
+library entries' full signatures) is assembled in Python by
+`graph.py`'s context builder and embedded directly in the prompt - see
+agents.py's module docstring for why this stage makes one single-shot call
+rather than giving the LLM tools to look these up mid-conversation. By the
+time this stage runs, everything it could need is already small and
+feature-scoped (earlier stages already narrowed it down), so there's nothing
+this prompt is missing that a tool call would have found instead.
+`hallucination_check` still validates every reference the LLM actually used
+afterward, unchanged.
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..schema import TestCase, TestStep
@@ -30,10 +43,14 @@ def _build_user_input(state: TestCaseState) -> str:
         f"Variable factor transitions: {row.variable_transitions}\n\n"
         f"Resolved factor signal mappings (factor::value -> signal/model_input/model_output_to_ecu):\n"
         f"{context.get('factor_signal_resolutions', {})}\n\n"
-        f"Selected compound commands for this requirement: {context.get('compound_commands', [])}\n"
-        f"Selected library calls for this requirement: {context.get('library_calls', [])}\n"
+        f"This feature's valid signals: {', '.join(context.get('valid_signals', [])) or '(none)'}\n\n"
+        f"Available tolerances (Config_Tol_*):\n" + "\n".join(context.get("tolerances", [])) + "\n\n"
+        f"Selected compound commands for this requirement (full step detail - use these exact names):\n"
+        + "\n".join(context.get("compound_command_details", [])) + "\n\n"
+        f"Selected library calls for this requirement (use these exact bare names):\n"
+        + "\n".join(context.get("library_details", []))
         + (
-            f"\nBackground context from Heading/Information rows on the requirement sheet "
+            f"\n\nBackground context from Heading/Information rows on the requirement sheet "
             f"(not requirements themselves, but may clarify intent):\n{context['heading_info']}\n"
             if context.get("heading_info")
             else ""
@@ -41,16 +58,14 @@ def _build_user_input(state: TestCaseState) -> str:
     )
 
 
-def build(llm, tools: list, settings, pipeline_config=None):
+def build(llm, settings, pipeline_config=None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
         row = state["pattern_row"]
         context = state.get("context", {})
         prompt = get_prompt("generate", settings)
         _logger.info("generating test case: req=%s scenario=%s", req.req_id, row.scenario_id)
-        result, _ = run_agent_with_structured_output(
-            llm, tools, prompt, _build_user_input(state), _GeneratedTestCase, pipeline_config=pipeline_config
-        )
+        result = call_llm(llm, prompt, _build_user_input(state), _GeneratedTestCase, pipeline_config=pipeline_config)
 
         test_case = TestCase(
             test_case_id="PENDING",

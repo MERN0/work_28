@@ -43,6 +43,7 @@ import time
 
 from langgraph.graph import END, StateGraph
 
+from . import excel_io
 from .config import Settings
 from .llm import get_llm
 from .logging_utils import get_logger, stage_timer
@@ -66,8 +67,7 @@ from .nodes import (
 )
 from .pipeline_config import PipelineConfig
 from .schema import Requirement, format_heading_info
-from .state import PipelineState, TestCaseState
-from .tools import build_tools
+from .state import PipelineState, TestCaseState, valid_signal_names
 from .workbook_store import InMemoryWorkbookStore
 
 _logger = get_logger(__name__)
@@ -92,7 +92,7 @@ def route_after_pass2(state: TestCaseState) -> str:
     return "correct"
 
 
-def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list, settings: Settings, pipeline_config: PipelineConfig):
+def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, settings: Settings, pipeline_config: PipelineConfig):
     """One node per validation-loop stage; conditional edges implement the
     '2 validation passes + 1 correction attempt' rule from plan §E.
 
@@ -102,16 +102,16 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list,
     only looks at pass1_result/pass2_result in state, not which node wrote them.
     """
     graph = StateGraph(TestCaseState)
-    graph.add_node("generate", generate.build(llm, tools, settings, pipeline_config))
+    graph.add_node("generate", generate.build(llm, settings, pipeline_config))
     graph.add_node("hallucination_check", hallucination_check.build(store, pipeline_config))
-    graph.add_node("correct", correct.build(llm, tools, settings, pipeline_config))
+    graph.add_node("correct", correct.build(llm, settings, pipeline_config))
     graph.add_node("finalize_pass", finalize_pass.build())
 
     graph.set_entry_point("generate")
     graph.add_edge("generate", "hallucination_check")
 
     if pipeline_config.combine_validation_passes:
-        graph.add_node("validate", validate.build_combined(llm, tools, settings, pipeline_config))
+        graph.add_node("validate", validate.build_combined(llm, settings, pipeline_config))
         graph.add_conditional_edges(
             "hallucination_check",
             route_after_hallucination,
@@ -121,8 +121,8 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list,
             "validate", route_after_pass2, {"finalize_pass": "finalize_pass", "correct": "correct"}
         )
     else:
-        graph.add_node("validate_pass1", validate.build_pass1(llm, tools, settings, pipeline_config))
-        graph.add_node("validate_pass2", validate.build_pass2(llm, tools, settings, pipeline_config))
+        graph.add_node("validate_pass1", validate.build_pass1(llm, settings, pipeline_config))
+        graph.add_node("validate_pass2", validate.build_pass2(llm, settings, pipeline_config))
         graph.add_conditional_edges(
             "hallucination_check",
             route_after_hallucination,
@@ -138,37 +138,65 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list,
     return graph.compile()
 
 
-def _context_builder(state: PipelineState, req: Requirement) -> dict:
-    """Assembles the per-test-case `context` dict passed into the inner
+def _make_context_builder(store: InMemoryWorkbookStore):
+    """Builds the per-test-case `context` dict passed into the inner
     subgraph's initial `TestCaseState` (see `nodes/test_case_loop.py`) -
-    everything `nodes/generate.py` needs beyond the requirement and pattern
-    row themselves. Includes `heading_info` (formatted via
-    `schema.format_heading_info`) so a requirement's surrounding
-    Heading/Information rows are available as background context to the
-    `generate` agent, not just computed and discarded."""
-    selections = state.get("compound_selections", {}).get(req.req_id, {})
-    return {
-        "feature_name": state.get("feature_name", ""),
-        "factor_signal_resolutions": state.get("factor_signal_resolutions", {}),
-        "compound_commands": selections.get("compound_commands", []),
-        "library_calls": selections.get("library_calls", []),
-        "heading_info": format_heading_info(state.get("heading_info", [])),
-    }
+    everything `nodes/generate.py` and `nodes/correct.py` need beyond the
+    requirement and pattern row themselves. A closure over `store` (not a
+    module-level function) because it now expands each selected compound
+    command/library call to its full detail via the store - the reason
+    `generate`/`correct` no longer need tools to look that up mid-call (see
+    agents.py's module docstring)."""
+
+    def context_builder(state: PipelineState, req: Requirement) -> dict:
+        selections = state.get("compound_selections", {}).get(req.req_id, {})
+
+        compound_details = []
+        for entry in selections.get("compound_commands", []):
+            cmd = store.get_compound_command(entry["name"])
+            if cmd is None:
+                continue
+            steps = "; ".join(f"{s.keyword_line}" + (f" (expected={s.expected_value})" if s.expected_value else "") for s in cmd.steps)
+            compound_details.append(f"- Compound {cmd.name} [{cmd.source_sheet}] steps: {steps or '(no steps)'}")
+
+        selected_lib_names = {excel_io.leading_identifier(entry["name"]) for entry in selections.get("library_calls", [])}
+        library_details = [
+            f"- {lib.signature} - {lib.description or ''}"
+            for lib in store.library_entries
+            if excel_io.leading_identifier(lib.signature) in selected_lib_names
+        ]
+
+        tolerances = [
+            f"- {t.tolerance_configuration}: +{t.value_positive}/-{t.value_negative} {t.tolerance_unit or ''}"
+            for t in store.tolerances
+        ]
+
+        return {
+            "feature_name": state.get("feature_name", ""),
+            "factor_signal_resolutions": state.get("factor_signal_resolutions", {}),
+            "valid_signals": valid_signal_names(state),
+            "tolerances": tolerances,
+            "compound_command_details": compound_details,
+            "library_details": library_details,
+            "heading_info": format_heading_info(state.get("heading_info", [])),
+        }
+
+    return context_builder
 
 
 def _build_outer_graph(
-    store: InMemoryWorkbookStore, llm, tools: list, settings: Settings, test_case_graph, pipeline_config: PipelineConfig
+    store: InMemoryWorkbookStore, llm, settings: Settings, test_case_graph, pipeline_config: PipelineConfig
 ):
     graph = StateGraph(PipelineState)
     graph.add_node("feature_index", feature_index.build(store))
-    graph.add_node("requirements_extract", requirements_extract.build(store, llm, tools, pipeline_config))
-    graph.add_node("comm_matrix_extract", comm_matrix_extract.build(store, llm, tools, pipeline_config))
-    graph.add_node("app_param_extract", app_param_extract.build(store, llm, tools, pipeline_config))
-    graph.add_node("io_signal_extract", io_signal_extract.build(store, llm, tools, pipeline_config))
-    graph.add_node("test_pattern_gen", test_pattern_gen.build(store, llm, tools, pipeline_config))
-    graph.add_node("model_mapping_resolve", model_mapping_resolve.build(store, llm, tools, pipeline_config))
-    graph.add_node("compound_command_map", compound_command_map.build(store, llm, tools, pipeline_config))
-    graph.add_node("test_case_loop", test_case_loop.build(test_case_graph, _context_builder, pipeline_config))
+    graph.add_node("requirements_extract", requirements_extract.build(store, llm, pipeline_config))
+    graph.add_node("comm_matrix_extract", comm_matrix_extract.build(store, llm, pipeline_config))
+    graph.add_node("app_param_extract", app_param_extract.build(store, llm, pipeline_config))
+    graph.add_node("io_signal_extract", io_signal_extract.build(store, llm, pipeline_config))
+    graph.add_node("test_pattern_gen", test_pattern_gen.build(store, llm, pipeline_config))
+    graph.add_node("model_mapping_resolve", model_mapping_resolve.build(store, llm, pipeline_config))
+    graph.add_node("compound_command_map", compound_command_map.build(store, llm, pipeline_config))
+    graph.add_node("test_case_loop", test_case_loop.build(test_case_graph, _make_context_builder(store), pipeline_config))
     graph.add_node("output_assemble", output_assemble.build(settings))
 
     graph.set_entry_point("feature_index")
@@ -197,10 +225,9 @@ def run_pipeline(settings: Settings, pipeline_config: PipelineConfig | None = No
     with stage_timer(_logger, "load_inputs"):
         store = load_inputs.load_inputs(settings, pipeline_config)
     llm = get_llm(pipeline_config, model=settings.model or None)
-    tools = build_tools(store)
 
-    inner_graph = _build_inner_test_case_graph(store, llm, tools, settings, pipeline_config)
-    outer_graph = _build_outer_graph(store, llm, tools, settings, inner_graph, pipeline_config)
+    inner_graph = _build_inner_test_case_graph(store, llm, settings, pipeline_config)
+    outer_graph = _build_outer_graph(store, llm, settings, inner_graph, pipeline_config)
 
     initial_state: PipelineState = {"feature_id": settings.req_sheet_name}
     with stage_timer(_logger, "outer_graph"):

@@ -11,11 +11,11 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from .. import excel_io
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..factors import get_factor_table
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
-from ..state import PipelineState
+from ..state import PipelineState, valid_signal_names
 from ..workbook_store import InMemoryWorkbookStore
 
 _logger = get_logger(__name__)
@@ -33,7 +33,7 @@ class _ResolutionBatch(BaseModel):
     resolutions: list[_ResolvedValue]
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
     input_threshold = pipeline_config.model_input_match_threshold if pipeline_config else 70
 
     def node(state: PipelineState) -> PipelineState:
@@ -62,15 +62,22 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
 
             if unresolved:
                 listing = "\n".join(f"- Factor {name!r}, value {value!r}" for name, value in unresolved)
+                mapping_listing = "\n".join(
+                    f"- Signal={row.signal!r} Test Case Input={row.test_case_input!r} "
+                    f"Model Input={row.model_input!r} Model Output to ECU={row.model_output_to_ecu!r}"
+                    for row in store.model_input_mapping
+                ) or "(Model_Input_Mapping sheet is empty)"
+                signal_listing = ", ".join(valid_signal_names(state)) or "(none)"
                 prompt = get_prompt("model_mapping_resolve")
                 user_input = (
                     f"Feature: {state.get('feature_name', state['feature_id'])!r}\n"
-                    f"Resolve the Model_Input_Mapping signal/value for each factor value below - use "
-                    f"get_model_input_mapping to find the right Signal and matching Test Case Input row.\n\n{listing}"
+                    f"Resolve the Model_Input_Mapping signal/value for each factor value below, using only "
+                    f"the Model_Input_Mapping rows and valid signals given here.\n\n"
+                    f"Factor values to resolve:\n{listing}\n\n"
+                    f"This feature's valid signals: {signal_listing}\n\n"
+                    f"Full Model_Input_Mapping table:\n{mapping_listing}"
                 )
-                result, _ = run_agent_with_structured_output(
-                    llm, tools, prompt, user_input, _ResolutionBatch, pipeline_config=pipeline_config
-                )
+                result = call_llm(llm, prompt, user_input, _ResolutionBatch, pipeline_config=pipeline_config)
                 for r in result.resolutions:
                     resolved[f"{r.factor_name}::{r.value}"] = {
                         "signal": r.signal,

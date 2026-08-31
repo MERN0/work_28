@@ -26,7 +26,7 @@ config dict (from the harness)
         │       resolve_input_files()          + InMemoryWorkbookStore.load()  ── workbook_store.py
         │       (every input .xlsx is parsed from disk ONCE, here)
         │
-        │  2. get_llm() + build_tools(store)  ── llm.py, tools.py
+        │  2. get_llm()                         ── llm.py
         │
         │  3. the OUTER StateGraph runs, one node per pipeline stage:
         │       feature_index → requirements_extract → comm_matrix_extract
@@ -96,15 +96,16 @@ factors.py                Human-supplied per-feature factor tables (Truck Size, 
                          an unregistered feature rather than letting an LLM guess.
 
 llm.py                   Builds the one ChatOpenAI client the run shares.
-agents.py                 The only place that talks to langchain's agent API
-                         (create_agent) - version-adapter + the native-vs-manual
-                         structured-output logic that halves LLM round trips.
-tools.py                  @tool-wrapped, read-only functions over InMemoryWorkbookStore -
-                         the ONLY way an LLM agent ever sees source data.
+agents.py                 One function, call_llm() - every LLM-backed node calls it
+                         to make a single-shot structured-output request. No
+                         tool-calling agent, no multi-turn loop - see its module
+                         docstring for why (§7 covers the failure mode this avoids).
 prompts.py                Every prompt template, in one dict, keyed by stage name.
 
 state.py                  The two TypedDicts (PipelineState, TestCaseState) threaded
-                         through the outer and inner LangGraph graphs.
+                         through the outer and inner LangGraph graphs, plus
+                         valid_signal_names() - a small shared helper both
+                         model_mapping_resolve and graph.py's context builder use.
 schema.py                  Every pydantic model: parsed-row shapes, TestCase/TestStep,
                          validation results, the run manifest.
 graph.py                   Builds and wires both StateGraphs (outer pipeline, inner
@@ -197,18 +198,26 @@ check that file first when something looks wrong or slow.
 
 ## 7. Where an LLM could pick the wrong thing (know the failure mode)
 
-`compound_command_map` and the library-call selection inside `generate` rely
-on **lexical** keyword-overlap search (`rapidfuzz.fuzz.token_set_ratio` in
-`workbook_store.py`'s `search_compound_commands`/`search_library`) to narrow
-~700 compound commands / ~50 libraries down to a shortlist the LLM actually
-reads. This is keyword overlap, not semantic similarity — if a requirement's
-wording shares no vocabulary with the right command's name/steps, that
-command may never make the shortlist, and no amount of LLM judgment
-afterward recovers from a candidate it never saw. There is currently no
-embedding/semantic fallback. Everything downstream of a *selected* name is
-still hallucination-checked (§5) — so a wrong-but-real command can pass that
-check; only the fidelity/plausibility validation might catch it being the
-wrong choice for the requirement, and only if it happens to notice.
+`compound_command_map` relies on **lexical** keyword-overlap search
+(`rapidfuzz.fuzz.token_set_ratio` in `workbook_store.py`'s
+`search_compound_commands`/`search_library`) to narrow ~700 compound
+commands / ~50 libraries down to a shortlist (`pipeline_config.
+compound_command_shortlist_size`/`library_shortlist_size`, 30 each) that's
+embedded directly in the one prompt the LLM sees for that requirement. This
+is keyword overlap, not semantic similarity — if a requirement's wording
+shares no vocabulary with the right command's name/steps, that command may
+never make the shortlist, and (since this is a single-shot call — see §9's
+most recent entry) the LLM can't re-search with a different term the way an
+earlier tool-calling version of this stage could. There is currently no
+embedding/semantic fallback; the shortlist size was raised specifically to
+compensate for losing that re-search capability. Everything downstream of a
+*selected* name is still hallucination-checked (§5) — so a wrong-but-real
+command can pass that check; only the fidelity/plausibility validation might
+catch it being the wrong choice for the requirement, and only if it happens
+to notice. If this proves insufficient in practice, the fix is a bigger
+shortlist or a second deterministic Python-side query with different terms -
+not reintroducing agentic tool exploration (see agents.py's module
+docstring for why that was removed).
 
 Existence checks (does this exact signal/tolerance/command name occur in the
 source data at all) are a different, much safer mechanism: `store.exists()`
@@ -230,12 +239,12 @@ unreachable outside the deployment environment). What *is* covered without
 one: Excel parsing/fuzzy-matching (`test_excel_io.py`, `test_workbook_store.py`),
 output layout (`test_xlsx_writer.py`), the validation/correction routing
 logic as pure functions (`test_graph_routing.py`), both graphs' structural
-wiring (`test_graph_build.py`), the native-vs-manual structured-output
-fallback logic with a stub agent (`test_agents.py`), the concurrent
-test-case loop's ordering/crash-safety with a stub subgraph
-(`test_test_case_loop.py`), and `pipeline_config.py`'s load/override chain
-(`test_pipeline_config.py`). A real end-to-end run (real Excel files, real
-LLM) can only be exercised in the deployed environment.
+wiring (`test_graph_build.py`), `call_llm()`'s retry-on-validation-error loop
+with a stubbed chat model (`test_agents.py`), the concurrent test-case loop's
+ordering/crash-safety with a stub subgraph (`test_test_case_loop.py`), and
+`pipeline_config.py`'s load/override chain (`test_pipeline_config.py`). A
+real end-to-end run (real Excel files, real LLM) can only be exercised in
+the deployed environment.
 
 ## 8b. Running against real input files from the CLI
 
@@ -286,14 +295,29 @@ From a pass that checked every LangChain/LangGraph API call against current
 documentation (via the `docs-langchain`/`reference-langchain` MCP tools, not
 memory) and grepped for unused code:
 
-**Deprecated API found and handled**: `langgraph.prebuilt.create_react_agent`
-carries an explicit deprecation notice in its own reference page, pointing at
-`langchain.agents.create_agent` (https://docs.langchain.com/oss/python/migrate/langgraph-v1).
-`agents.py` already tries `create_agent` first and only imports the
-deprecated function as a fallback if that import fails - confirmed live in
-this environment that `AGENT_API == "langchain.agents.create_agent"`, so the
-deprecated path is dormant here, kept only so this module doesn't hard-fail
-on an older `langgraph`-only install. See `agents.py`'s module docstring.
+**Superseded entirely: the tool-calling agent layer.** Earlier versions of
+this codebase built a `langchain.agents.create_agent(...)` tool-calling loop
+per LLM-backed stage (with `langgraph.prebuilt.create_react_agent` as a
+deprecated fallback if `create_agent` wasn't importable), giving the LLM
+read-only tools (`tools.py`, `StructuredTool.from_function`-wrapped
+`InMemoryWorkbookStore` methods) it could call mid-conversation. Against the
+real deployment (a litellm proxy in front of a self-hosted `gpt-oss-120b`
+via vLLM), that repeatedly broke in the specific place a tool-calling loop
+is exposed: the *second* turn, once a completed tool call was already in the
+conversation history (see entry 2 below - the `output_version="v0"` fix was
+a real but partial workaround for this, not the actual fix). Replaced with a
+single-shot architecture: every stage's Python code already knows how to
+fetch/shortlist whatever context its LLM call needs (that logic lives in
+`workbook_store.py` and didn't change), so every node now assembles that
+context into the prompt itself and makes exactly ONE
+`llm.with_structured_output(schema)` call via `agents.py`'s `call_llm()` -
+never a second turn, never a `ToolMessage`, which is what makes this immune
+to the whole bug class rather than one more patch for it. `tools.py` is
+deleted; every node's `build(store, llm, tools, pipeline_config)` lost the
+`tools` parameter; the top-level `langchain` package (only used for
+`create_agent`) is no longer a dependency at all. See `agents.py`'s module
+docstring for the full reasoning, and §7 for the one real trade-off (the LLM
+can no longer autonomously re-search a missed shortlist).
 
 **Outdated (not deprecated, but superseded) parameter names fixed**:
 `llm.py` was constructing `ChatOpenAI(openai_api_key=..., openai_api_base=...,
@@ -304,11 +328,11 @@ are `api_key`, `base_url`, and `timeout`
 Updated to match.
 
 **Confirmed NOT deprecated** (checked because they looked like candidates):
-`StructuredTool.from_function` (tools.py) - still the documented mechanism
-for wrapping a dynamically-built closure as a tool, see tools.py's own
-docstring for why it's the right choice here over the simpler `@tool`
-decorator. Pydantic v2 usage throughout (`model_dump`/`model_validate`/
-`model_copy`, no `.dict()`/`.json()`/v1 shims) - already current.
+Pydantic v2 usage throughout (`model_dump`/`model_validate`/`model_copy`, no
+`.dict()`/`.json()`/v1 shims) - already current.
+`llm.with_structured_output(schema)` (`langchain_core.language_models.BaseChatModel`)
+- the documented single-call mechanism for a typed answer from any chat
+model, current as of this codebase's pinned `langchain-core` version.
 
 **Dead code removed**: `custom_keywords` (parsed from the "Custom Keyword &
 Library Details" sheet into a `CustomKeywordEntry` model) was stored on
@@ -379,19 +403,18 @@ dry run of the pipeline (not just static review)**:
    endpoint is exactly that: an internal litellm proxy in front of a
    self-hosted `gpt-oss-120b` via vLLM, not real OpenAI. Matches a known,
    already-filed LangChain issue against this same model family
-   (https://github.com/langchain-ai/langchain/issues/34751). Fixed in
-   `llm.py`'s `get_llm()`: `output_version="v0"` (the officially documented
-   backwards-compatibility value - plain-string content again) and
-   `use_responses_api=False` (this proxy only speaks Chat Completions, so
-   there's never a reason to let LangChain's own auto-detection consider the
-   Responses API). `output_version` is exposed as
-   `pipeline_config.llm_output_version` (default `"v0"`) in case a future
-   endpoint needs a different value. If this class of error recurs despite
-   the fix, the next lever to try - no code change needed - is
-   `pipeline_config.json`'s `use_native_structured_output: false`, which
-   avoids `response_format=`/`AutoStrategy` for the structuring step
-   entirely (see `agents.py`'s module docstring on the native vs. manual
-   structured-output path).
+   (https://github.com/langchain-ai/langchain/issues/34751). Fixed at the
+   time in `llm.py`'s `get_llm()`: `output_version="v0"` (the officially
+   documented backwards-compatibility value - plain-string content again)
+   and `use_responses_api=False`. That setting is still in place (harmless,
+   still the right default for this endpoint), but it turned out to be a
+   partial workaround, not the real fix - further "llm validation error"
+   reports kept surfacing from the same root cause (a tool-calling agent's
+   multi-turn conversation history). The actual fix was architectural: see
+   the "Superseded entirely: the tool-calling agent layer" entry above -
+   removing tool-calling agents altogether (single-shot `call_llm()` calls,
+   no second turn, ever) closes off this whole bug class rather than
+   patching around one symptom of it.
 
 3. **Functional/NonFunctional Requirement category collision.** The
    Requirement-sheet Category fast-path (`requirements_extract.py`) fuzzy-

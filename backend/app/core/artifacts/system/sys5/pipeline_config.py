@@ -78,8 +78,11 @@ class PipelineConfig:
     general_fuzzy_threshold: int = 90         # default for excel_io.fuzzy_equal/fuzzy_find when no other threshold applies
 
     # -- Retrieval shortlist sizes --------------------------------------------
-    compound_command_shortlist_size: int = 20
-    library_shortlist_size: int = 20
+    # Each LLM call gets one shot at this shortlist (no more agentic
+    # re-search with a refined query - see agents.py's module docstring), so
+    # these are generous (raised from 20) to keep a real miss rare.
+    compound_command_shortlist_size: int = 30
+    library_shortlist_size: int = 30
     command_lookup_top_k: int = 3
 
     # -- Performance / concurrency --------------------------------------------
@@ -93,10 +96,6 @@ class PipelineConfig:
     # the validation stage's LLM round trips with no loss of rubric coverage.
     # Set false to restore the original two-separate-calls behavior.
     combine_validation_passes: bool = True
-    # Use the installed agent API's native response_format (when available)
-    # instead of always doing a second, separate structured-output call after
-    # the tool-use loop. See agents.py.
-    use_native_structured_output: bool = True
 
     # -- Output ----------------------------------------------------------------
     test_case_id_prefix: str = "TMHC_SQTC"

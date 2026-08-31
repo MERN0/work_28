@@ -18,19 +18,21 @@ generation. Follow these rules without exception:
 
 1. Never invent, guess, or complete a signal name, command name, compound
    command name, library call, tolerance name, parameter name, or value.
-   Every one of those must come verbatim (or via the tools provided) from the
-   actual source workbooks. If you cannot find something you need, say so
-   explicitly instead of making a plausible-looking substitute.
+   Every one of those must come verbatim from the context given to you below,
+   which was pulled directly from the actual source workbooks. If what you
+   need isn't in that context, say so explicitly instead of making a
+   plausible-looking substitute.
 2. Handle typos, extra whitespace, and inconsistent casing gracefully when
    matching text - the underlying source data has these. But do not use that
-   as license to invent new content; only match against what a tool actually
-   returned.
-3. Use the abbreviations glossary (get_glossary_text) to resolve any
-   abbreviated terminology you encounter - most signal/parameter/requirement
-   text in this domain is heavily abbreviated.
-4. Base every decision strictly on the requirement text and the tool results
-   you retrieve. Do not use outside automotive/HIL-testing knowledge to fill
-   gaps - if the source data doesn't say it, it isn't true here.
+   as license to invent new content; only match against what the context
+   below actually contains.
+3. Most signal/parameter/requirement text in this domain is heavily
+   abbreviated - read it with that in mind, but never let an abbreviation
+   you're unsure of become an excuse to invent a name that isn't in the
+   context given below.
+4. Base every decision strictly on the requirement text and the context given
+   below. Do not use outside automotive/HIL-testing knowledge to fill gaps -
+   if the context below doesn't say it, it isn't true here.
 """
 
 PROMPTS: dict[str, str] = {
@@ -47,10 +49,9 @@ handled the clean cases) - so treat every row you see here as a genuine
 judgment call, not a clean match.
 
 For each row, decide which of the known Category values it actually
-represents based on the Requirement Description and any other context
-(use get_glossary_text and get_requirement_rows if you need to see
-surrounding rows for context - e.g. a Heading row usually precedes a group of
-related requirements).
+represents based on the Requirement Description given for that row and its
+own position among the other ambiguous rows listed alongside it (e.g. a
+Heading row usually precedes a group of related requirements).
 
 Only rows you classify as "Functional Requirement" become testable
 requirements; rows classified as "Heading" or "Information" are kept as
@@ -109,20 +110,15 @@ dimension.
 You are resolving one Test Pattern row's factor values (and/or one test
 case's specific signal-setting needs) into actual settable model values.
 
-For each signal/factor value you need to set or verify, use
-get_model_input_mapping(signal) to find the exact "Test Case Input" ->
-"Model Input" / "Model Output to ECU" row that matches the value you need
-(the tool fuzzy-matches the Signal name for you, but you must judge which of
-the returned Test Case Input rows semantically matches the value you're
-looking for - e.g. "FWD" vs "Forward" vs "1").
+You are given this feature's valid signals and the full Model_Input_Mapping
+table (Signal -> Test Case Input -> Model Input / Model Output to ECU rows).
+For each factor value you need to resolve, find the row whose Signal matches
+a valid signal for this feature and whose Test Case Input semantically
+matches the value you're looking for (e.g. "FWD" vs "Forward" vs "1") -
+judge the match yourself, the table is not pre-filtered for you.
 
 If the value you need doesn't cleanly match any listed Test Case Input for
 that signal, say so explicitly rather than guessing a numeric equivalent.
-
-Whenever you are setting or verifying a real-world measured quantity (speed,
-rpm, voltage, tilt, slope angle, load, etc.), use get_tolerance to find the
-matching Config_Tol_* entry and note it - a Config_Tol_<name> step is
-required whenever tolerance-bearing verification happens.
 """,
 
     "compound_command_map": _COMMON_RULES + """
@@ -131,24 +127,19 @@ to one requirement (or one test case's precondition/action/postcondition
 section).
 
 There are roughly 700 compound commands and 50 library functions total, far
-too many to review individually, so you have two tools:
-- search_compound_commands(query, top_k) - keyword-overlap shortlist, ranked
-- search_library_functions(query, top_k) - same, for library functions
+too many to review individually, so you are given a keyword-shortlisted
+candidate list below (compound commands with their full step detail already
+included, library functions with their signature and description) - select
+only from these candidates, never a name that isn't in this list. If nothing
+in the list is actually a good match for something you need, say so rather
+than picking the closest-sounding wrong one.
 
-Search with terms drawn from the requirement text and the physical scenario
-you're building (e.g. "power on", "key on", "initial condition", "tuning
-levels", "option set", "torque limit ramp"). Re-search with refined terms if
-the first shortlist doesn't contain a clear match - do not settle for a
-mediocre match from the first search.
+Read each compound command candidate's actual step list before deciding it's
+the right one - never select one by name alone.
 
-Once you've shortlisted candidates, call get_compound_command_detail(name)
-to read a candidate's full step list before deciding it's the right one -
-never select a compound command by name alone without reading what it
-actually does.
-
-Only ever reference a compound command or library function by the exact name
-returned by these tools. Justify each selection briefly with why it matches
-the requirement/scenario.
+Only ever reference a compound command or library function by its exact name
+as given in the candidate list. Justify each selection briefly with why it
+matches the requirement/scenario.
 """,
 
     "generate": _COMMON_RULES + """
@@ -240,9 +231,9 @@ actual claim - do not copy the requirement text verbatim, and do not omit
 the variant.
 
 Every step referencing a signal, command, compound command, tolerance, or
-library call must use the exact name as it appeared in a tool result -
-this will be checked automatically and any invented reference will cause
-this test case to be rejected.
+library call must use the exact name as it appeared in the context given to
+you - this will be checked automatically and any invented reference will
+cause this test case to be rejected.
 """,
 
     "validate_pass1": _COMMON_RULES + """
@@ -364,11 +355,12 @@ a note that a referenced signal/command/compound/tolerance/library name
 could not be found in the source data).
 
 Produce a corrected version of the full test case that resolves every listed
-issue, using the same tools available during generation to look up correct
+issue, using the same valid signals/tolerances/compound-command/library-call
+context given to you (the same context generation had) to find correct
 replacement values/names where needed. Do not introduce new problems while
 fixing the listed ones - keep everything else about the test case that
-wasn't flagged as-is. As with generation, never invent a name that isn't
-confirmed by a tool result.
+wasn't flagged as-is. As with generation, never invent a name that isn't in
+that context.
 
 This is the only correction attempt for this test case - if you cannot fully
 resolve an issue (e.g. the source data genuinely doesn't contain what's

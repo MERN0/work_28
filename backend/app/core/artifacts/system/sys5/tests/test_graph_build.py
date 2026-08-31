@@ -27,10 +27,9 @@ def test_inner_and_outer_graphs_compile(fixture_paths, feature_id, combine_valid
     store = InMemoryWorkbookStore.load(fixture_paths, feature_id, pipeline_config)
     settings = _settings()
     llm = object()  # never invoked - build_* only wires nodes, doesn't call the LLM
-    tools: list = []
 
-    inner = _build_inner_test_case_graph(store, llm, tools, settings, pipeline_config)
+    inner = _build_inner_test_case_graph(store, llm, settings, pipeline_config)
     assert inner is not None
 
-    outer = _build_outer_graph(store, llm, tools, settings, inner, pipeline_config)
+    outer = _build_outer_graph(store, llm, settings, inner, pipeline_config)
     assert outer is not None

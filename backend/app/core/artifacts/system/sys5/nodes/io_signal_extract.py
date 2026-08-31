@@ -19,11 +19,11 @@ def _s(row: dict, key: str) -> str | None:
     return excel_io._norm(row.get(key)) or None
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
     def node(state: PipelineState) -> PipelineState:
         feature_id = state["feature_id"]
         with stage_timer(_logger, "io_signal_extract", feature_id=feature_id):
-            rows = extract_valid_rows(store, "io_signal", feature_id, llm, tools, pipeline_config)
+            rows = extract_valid_rows(store, "io_signal", feature_id, llm, pipeline_config)
             signals = [
                 IOSignal(
                     signal_id=_s(row, "Signal ID"),

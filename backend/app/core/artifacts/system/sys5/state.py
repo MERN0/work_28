@@ -57,3 +57,18 @@ class TestCaseState(TypedDict, total=False):
     pass2_result: Optional[ValidationResult]
     correction_attempted: bool
     final_test_case: Optional[TestCase]
+
+
+def valid_signal_names(state: PipelineState) -> list[str]:
+    """This feature's known-valid signal/command names, from the already
+    -extracted comm-matrix/IO-signal rows - used to give `model_mapping_resolve`
+    and `generate`'s single-shot LLM calls a real, bounded list of names to
+    reference instead of a tool they'd have to call to find out (see
+    agents.py's module docstring)."""
+    names: list[str] = []
+    for sig in state.get("comm_matrix_valid", []):
+        names += [n for n in (sig.signal_name, sig.logical_signal_name, sig.command_name) if n]
+    for sig in state.get("io_signal_valid", []):
+        if sig.logical_signal_name:
+            names.append(sig.logical_signal_name)
+    return sorted(set(names))

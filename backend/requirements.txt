@@ -1,12 +1,15 @@
 # Pinned to the exact mutually-compatible set resolved and import-verified in
 # this session (network access was available here, unlike the assumption in
 # the original plan). Re-verify with `pip install -r requirements.txt` and a
-# quick `python -c "from app.core.artifacts.system.sys5.agents import AGENT_API; print(AGENT_API)"`
-# smoke test after any upgrade - the langchain/langgraph release train moves
-# fast and has genuine cross-package incompatibilities (e.g. langchain 1.0.8
-# + langgraph 1.0.10 fails to import; the pins below are known-good together).
+# quick `python -c "import app.core.artifacts.system.sys5.agents"` smoke test
+# after any upgrade - the langgraph/langchain-core/langchain-openai release
+# train moves fast and has genuine cross-package incompatibilities.
+#
+# The top-level `langchain` package (create_agent) is deliberately NOT a
+# dependency - sys5 makes single-shot `llm.with_structured_output(...)` calls
+# (langchain_core/langchain_openai only) rather than building tool-calling
+# agents; see agents.py's module docstring for why.
 langgraph==1.2.11
-langchain==1.3.18
 langchain-core==1.6.1
 langchain-openai==1.6.0
 openpyxl==3.1.5

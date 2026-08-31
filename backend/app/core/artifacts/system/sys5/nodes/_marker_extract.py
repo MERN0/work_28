@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..workbook_store import InMemoryWorkbookStore
@@ -23,7 +23,7 @@ class _AmbiguousBatch(BaseModel):
 
 
 def extract_valid_rows(
-    store: InMemoryWorkbookStore, sheet: str, feature_id: str, llm, tools: list, pipeline_config=None
+    store: InMemoryWorkbookStore, sheet: str, feature_id: str, llm, pipeline_config=None
 ) -> list[dict]:
     """Return raw row dicts (canonical field names, `_marker*` keys stripped)
     that are valid for `feature_id`: a clean 'O' via the deterministic
@@ -49,9 +49,7 @@ def extract_valid_rows(
             f"For each row below, the feature-column marker cell was not a clean 'O' or 'x'. "
             f"Decide VALID or NOT for each.\n\n{listing}"
         )
-        result, _ = run_agent_with_structured_output(
-            llm, tools, prompt, user_input, _AmbiguousBatch, pipeline_config=pipeline_config
-        )
+        result = call_llm(llm, prompt, user_input, _AmbiguousBatch, pipeline_config=pipeline_config)
         decided = {d.row_index: d.valid for d in result.decisions}
         for i, raw, clean in ambiguous:
             if decided.get(i):

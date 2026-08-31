@@ -9,7 +9,7 @@ Two modes, chosen by `pipeline_config.combine_validation_passes`:
 """
 from __future__ import annotations
 
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..schema import CombinedValidationResult, ValidationResult
@@ -28,32 +28,28 @@ def _user_input(state: TestCaseState) -> str:
     )
 
 
-def _build(rubric_stage: str, result_key: str, llm, tools: list, settings, pipeline_config):
+def _build(rubric_stage: str, result_key: str, llm, settings, pipeline_config):
     def node(state: TestCaseState) -> TestCaseState:
         prompt = get_prompt(rubric_stage, settings)
-        result, _ = run_agent_with_structured_output(
-            llm, tools, prompt, _user_input(state), ValidationResult, pipeline_config=pipeline_config
-        )
+        result = call_llm(llm, prompt, _user_input(state), ValidationResult, pipeline_config=pipeline_config)
         _logger.info("validation[%s] req=%s passed=%s issues=%d", rubric_stage, state["requirement"].req_id, result.passed, len(result.issues))
         return {**state, result_key: result}
 
     return node
 
 
-def build_pass1(llm, tools: list, settings, pipeline_config=None):
-    return _build("validate_pass1", "pass1_result", llm, tools, settings, pipeline_config)
+def build_pass1(llm, settings, pipeline_config=None):
+    return _build("validate_pass1", "pass1_result", llm, settings, pipeline_config)
 
 
-def build_pass2(llm, tools: list, settings, pipeline_config=None):
-    return _build("validate_pass2", "pass2_result", llm, tools, settings, pipeline_config)
+def build_pass2(llm, settings, pipeline_config=None):
+    return _build("validate_pass2", "pass2_result", llm, settings, pipeline_config)
 
 
-def build_combined(llm, tools: list, settings, pipeline_config=None):
+def build_combined(llm, settings, pipeline_config=None):
     def node(state: TestCaseState) -> TestCaseState:
         prompt = get_prompt("validate_combined")
-        result, _ = run_agent_with_structured_output(
-            llm, tools, prompt, _user_input(state), CombinedValidationResult, pipeline_config=pipeline_config
-        )
+        result = call_llm(llm, prompt, _user_input(state), CombinedValidationResult, pipeline_config=pipeline_config)
         pass1 = result.fidelity.model_copy(update={"rubric": "validate_pass1"})
         pass2 = result.plausibility.model_copy(update={"rubric": "validate_pass2"})
         _logger.info(

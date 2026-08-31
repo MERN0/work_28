@@ -33,9 +33,9 @@ def test_clean_functional_and_heading_rows_fast_path_no_llm_call(monkeypatch):
         _row("", "Slope Assist Requirements", "Heading"),
         _row("REQ-1", "desc1", "Functional Requirement"),
     ]
-    monkeypatch.setattr(requirements_extract, "run_agent_with_structured_output", _no_llm_call)
+    monkeypatch.setattr(requirements_extract, "call_llm", _no_llm_call)
 
-    node = requirements_extract.build(_FakeStore(rows), llm=None, tools=[], pipeline_config=PipelineConfig())
+    node = requirements_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
     state = node({})
 
     assert [r.req_id for r in state["requirements"]] == ["REQ-1"]
@@ -52,9 +52,9 @@ def test_clean_non_functional_and_configuration_rows_never_produce_test_cases(mo
         _row("REQ-CFG", "a configuration requirement", "Configuration Requirement"),
         _row("REQ-SEC", "a security requirement", "Security Requirement"),
     ]
-    monkeypatch.setattr(requirements_extract, "run_agent_with_structured_output", _no_llm_call)
+    monkeypatch.setattr(requirements_extract, "call_llm", _no_llm_call)
 
-    node = requirements_extract.build(_FakeStore(rows), llm=None, tools=[], pipeline_config=PipelineConfig())
+    node = requirements_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
     state = node({})
 
     assert state["requirements"] == []
@@ -74,13 +74,13 @@ def test_non_functional_requirement_is_never_silently_fast_pathed_as_functional(
 
     escalated_inputs = []
 
-    def _stub(llm, tools, prompt, user_input, schema, pipeline_config=None):
+    def _stub(llm, prompt, user_input, schema, pipeline_config=None):
         escalated_inputs.append(user_input)
-        return schema(rows=[{"row_index": 0, "category": "NonFunctional Requirement"}]), "stubbed"
+        return schema(rows=[{"row_index": 0, "category": "NonFunctional Requirement"}])
 
-    monkeypatch.setattr(requirements_extract, "run_agent_with_structured_output", _stub)
+    monkeypatch.setattr(requirements_extract, "call_llm", _stub)
 
-    node = requirements_extract.build(_FakeStore(rows), llm=None, tools=[], pipeline_config=PipelineConfig())
+    node = requirements_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
     state = node({})
 
     assert escalated_inputs, "an ambiguous non-functional category must escalate to the LLM, not be fast-pathed"
@@ -92,9 +92,9 @@ def test_functional_requirement_typo_still_fast_paths(monkeypatch):
     """The stricter threshold (95) must not break genuine typo tolerance -
     only reject the specific Functional/NonFunctional collision shape."""
     rows = [_row("REQ-3", "desc3", "Functional Requirment")]  # missing 'e'
-    monkeypatch.setattr(requirements_extract, "run_agent_with_structured_output", _no_llm_call)
+    monkeypatch.setattr(requirements_extract, "call_llm", _no_llm_call)
 
-    node = requirements_extract.build(_FakeStore(rows), llm=None, tools=[], pipeline_config=PipelineConfig())
+    node = requirements_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
     state = node({})
 
     assert [r.req_id for r in state["requirements"]] == ["REQ-3"]

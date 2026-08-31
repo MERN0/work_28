@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ..agents import run_agent_with_structured_output
+from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..schema import TestCase, TestStep
@@ -27,10 +27,11 @@ def _collect_issues(state: TestCaseState) -> list[str]:
     return issues
 
 
-def build(llm, tools: list, settings, pipeline_config=None):
+def build(llm, settings, pipeline_config=None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
         test_case = state["test_case"]
+        context = state.get("context", {})
         issues = _collect_issues(state)
         _logger.info("correcting test case: req=%s issues=%d", req.req_id, len(issues))
 
@@ -38,11 +39,15 @@ def build(llm, tools: list, settings, pipeline_config=None):
         user_input = (
             f"Requirement {req.req_id}: {req.description}\n\n"
             f"Original test case:\n{test_case.model_dump_json(indent=2)}\n\n"
-            f"Issues to resolve:\n" + "\n".join(f"- {i}" for i in issues)
+            f"Issues to resolve:\n" + "\n".join(f"- {i}" for i in issues) + "\n\n"
+            f"This feature's valid signals: {', '.join(context.get('valid_signals', [])) or '(none)'}\n"
+            f"Available tolerances (Config_Tol_*):\n" + "\n".join(context.get("tolerances", [])) + "\n"
+            f"Selected compound commands (full step detail - use these exact names):\n"
+            + "\n".join(context.get("compound_command_details", [])) + "\n"
+            f"Selected library calls (use these exact bare names):\n"
+            + "\n".join(context.get("library_details", []))
         )
-        result, _ = run_agent_with_structured_output(
-            llm, tools, prompt, user_input, _CorrectedTestCase, pipeline_config=pipeline_config
-        )
+        result = call_llm(llm, prompt, user_input, _CorrectedTestCase, pipeline_config=pipeline_config)
 
         corrected = test_case.model_copy(update={"description": result.description, "steps": result.steps})
         return {**state, "test_case": corrected, "issues": [], "correction_attempted": True}
