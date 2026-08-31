@@ -60,7 +60,7 @@ def _to_requirement(row: dict) -> Requirement:
 
 
 def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
-    threshold = pipeline_config.category_match_threshold if pipeline_config else 85
+    threshold = pipeline_config.category_match_threshold if pipeline_config else 95
 
     def node(state: PipelineState) -> PipelineState:
         with stage_timer(_logger, "requirements_extract"):

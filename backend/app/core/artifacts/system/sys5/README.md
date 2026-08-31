@@ -75,6 +75,9 @@ is missing — see that module's own docstring for the full load order.
 sys5.py                 entry point: generate(config) -> zip path. Also runnable
                          standalone (`python sys5.py config.json`) - see its docstring
                          for the PEP 366 trick that makes both modes work.
+cli.py                    Argument-based CLI wrapper around sys5.generate() for a real
+                         run against real files from a terminal - point it at your 5
+                         input workbooks + a feature id + an output dir (§8b).
 config.py                Settings: the per-run config dict, typed.
 pipeline_config.py/.json PipelineConfig: engineering knobs, one place to edit (§2).
 logging_utils.py        configure_logging() / get_logger() / stage_timer() - every
@@ -234,6 +237,49 @@ test-case loop's ordering/crash-safety with a stub subgraph
 (`test_pipeline_config.py`). A real end-to-end run (real Excel files, real
 LLM) can only be exercised in the deployed environment.
 
+## 8b. Running against real input files from the CLI
+
+`cli.py` is a thin argparse wrapper around the exact same `sys5.generate(config)`
+entry point the production harness calls - a manual CLI run and a harness run
+execute identical pipeline code, no stubbing. It needs real network access to
+whatever LLM endpoint `pipeline_config.json` (or its env var overrides) points
+at, since it makes real LLM calls.
+
+Point it at your 5 input workbooks individually:
+
+```bash
+cd backend
+python app/core/artifacts/system/sys5/cli.py \
+    --requirements       "/path/to/System Requirements.xlsx" \
+    --command-list       "/path/to/TE_TMHC_Command_List.xlsx" \
+    --configuration      "/path/to/TE_TMHC_Configuration_File.xlsx" \
+    --compound-commands  "/path/to/TE_TMHC_Compound_Commands.xlsx" \
+    --keyword-library    "/path/to/TE_TMHC_..._Keyword_Library_Description_Sheet.xlsx" \
+    --feature-id 019 \
+    --output-dir /path/to/output
+```
+
+...or, if all 5 already sit in one folder under their usual names, point
+`--input-dir` at it instead and skip the individual flags - they resolve by
+fuzzy name match, exactly like the production harness's `input_folder_path`
+does (see `workbook_store.resolve_input_files`):
+
+```bash
+python app/core/artifacts/system/sys5/cli.py \
+    --input-dir /path/to/input_folder \
+    --feature-id 019 \
+    --output-dir /path/to/output
+```
+
+`--feature-id` is the System Requirements workbook's sheet name for the
+feature to generate test cases for - it must already have a factor table
+registered in `factors.py`, or the run fails fast with
+`MissingFactorTableError` before any LLM work starts. Run
+`python app/core/artifacts/system/sys5/cli.py --help` for every flag
+(`--model` to override the LLM model, `--project-name`, etc.). Also runnable
+as `python -m app.core.artifacts.system.sys5.cli ...` from `backend/` - see
+`cli.py`'s own docstring for the PEP 366 detail that makes both work.
+
 ## 9. Codebase audit notes (deprecated APIs, dead code, simplifications)
 
 From a pass that checked every LangChain/LangGraph API call against current
@@ -300,3 +346,42 @@ the same thing. Every file already has `from __future__ import annotations`,
 so switching is safe, but it's purely cosmetic across ~80 occurrences
 concentrated in `schema.py` - lower value than the fixes above for the
 effort/review-risk, so left as-is rather than done as a blind bulk edit.
+
+**Two real correctness bugs found and fixed after this audit, via an actual
+dry run of the pipeline (not just static review)**:
+
+1. **Library-call hallucination-guardrail false-negative.** `store.exists()`'s
+   `"library_call"` branch and `compound_command_map.py` both derived a
+   library function's bare name from its Library-List signature by splitting
+   on `"("` - which, for the real signature style
+   `"Lib_Ramp Signal_Name(Start=X,...)"` (no space before the parameter
+   list), kept the literal placeholder parameter name and yielded
+   `"Lib_Ramp Signal_Name"` instead of `"Lib_Ramp"`. A real generated step
+   referencing `"Lib_Ramp"` then scored only ~57 on `token_sort_ratio`
+   against that candidate - far below the 90-92 thresholds used throughout -
+   so **every** step calling a library function would fail the hallucination
+   check. Fixed with `excel_io.leading_identifier()`, which splits on
+   whitespace *before* looking for `"("`, resolving correctly for both that
+   style and the space-before-parens style (`"Lib_CheckTorqueLimit (...)"`).
+   Also gave `TestStep.target_ref` an explicit `Field` description so the LLM
+   knows to put the bare name there, not the full call with arguments.
+
+2. **Functional/NonFunctional Requirement category collision.** The
+   Requirement-sheet Category fast-path (`requirements_extract.py`) fuzzy-
+   matches a row's raw Category text against the known vocabulary at
+   `category_match_threshold` (was 85). `rapidfuzz.token_sort_ratio` scores
+   `"Non Functional Requirement"` (space- or underscore-separated - not an
+   exact match to the vocabulary entry `"NonFunctional Requirement"`)
+   against `"Functional Requirement"` at ~91.7 - above that old threshold,
+   so a non-functional requirement row would silently fast-path as
+   Functional and get real test cases generated for it, never reaching the
+   LLM escalation path Decision 6 relies on for exactly this kind of
+   ambiguity. Raised `category_match_threshold` to 95 (comfortably above the
+   ~91.7-93.6 collision range, still below genuine-typo scores of 97.7-100 -
+   see the threshold's own comment in `pipeline_config.py`), and added
+   `tests/test_requirements_extract.py` as a direct regression test:
+   `Category == "Functional Requirement"` is the *only* value that ever
+   produces a testable `Requirement` - every other known category
+   (`NonFunctional Requirement`, `Configuration Requirement`,
+   `Security Requirement`), even a clean non-ambiguous match, is recognized
+   and then dropped, never appearing in `requirements` *or* `heading_info`.

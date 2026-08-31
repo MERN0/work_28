@@ -38,7 +38,15 @@ class PipelineConfig:
     header_row_match_threshold: int = 75      # locating a sheet's header row among title/banner rows
     column_match_threshold: int = 75          # matching a real column header to a canonical field name
     sheet_name_match_threshold: int = 80      # matching a workbook's sheet name to an expected name
-    category_match_threshold: int = 85        # Requirement sheet Category value fast-path
+    # Requirement sheet Category value fast-path. Deliberately much stricter
+    # than the other 75-80 header/column thresholds above: 'Functional
+    # Requirement' vs 'NonFunctional Requirement' (space- or
+    # underscore-separated, e.g. 'Non Functional Requirement') scores ~91.7
+    # on token_sort_ratio - a naive 85 threshold let a non-functional row
+    # silently fast-path as a testable Functional Requirement instead of
+    # escalating to the LLM. 95 sits above that collision while still
+    # fast-pathing genuine typos ('Functional Requirment' etc, 97.7+).
+    category_match_threshold: int = 95
     command_match_threshold: int = 80         # Comm Matrix Signal name -> Command List Command name
     model_input_match_threshold: int = 70     # factor value -> Model_Input_Mapping Test Case Input
     hallucination_match_threshold: int = 92   # the anti-hallucination guardrail (store.exists) - deliberately strict
