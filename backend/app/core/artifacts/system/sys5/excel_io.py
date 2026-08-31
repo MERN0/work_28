@@ -178,6 +178,25 @@ def forward_fill_columns(matrix: list[list[Any]], col_indices: list[int]) -> Non
                 last[idx] = row[idx]
 
 
+def leading_identifier(value: Any) -> str:
+    """Extract the bare leading identifier token from a library-function
+    signature or a generated step's call name - e.g. 'Lib_Ramp' from both
+    'Lib_Ramp Signal_Name(Start=X,Stop=X,Step=X,Time=X)' (no space before the
+    parameter list) and 'Lib_CheckTorqueLimit (Map=MapX,...)' (space before
+    it). Splitting on whitespace *first*, before ever looking for '(', is
+    what makes both stylings resolve to the same bare name. Splitting on '('
+    alone (the earlier approach) kept the literal placeholder parameter name
+    ('Signal_Name') as part of the extracted name for the no-space style,
+    which made every real 'Lib_Ramp' usage fuzzy-score far below any sane
+    threshold against the signature-derived candidate - silently failing the
+    hallucination guardrail for every step that calls a library function."""
+    s = _norm(value)
+    if not s:
+        return ""
+    first_token = s.split()[0]
+    return first_token.split("(")[0].strip()
+
+
 def fuzzy_find(needle: Any, haystack: list[str], threshold: int = 90) -> Optional[str]:
     """Return the entry in `haystack` that best fuzzy-matches `needle`, or None
     if nothing crosses `threshold`. Used by the hallucination guardrail - the

@@ -552,7 +552,7 @@ class InMemoryWorkbookStore:
         elif ref_kind == "tolerance":
             candidates = [t.tolerance_configuration for t in self.tolerances]
         elif ref_kind == "library_call":
-            candidates = [entry.signature.split("(")[0].strip() for entry in self.library_entries]
+            candidates = [excel_io.leading_identifier(entry.signature) for entry in self.library_entries]
         elif ref_kind == "parameter":
             candidates = [row.get("Parameter Name") or "" for row in self._all_param_rows()]
         else:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from .. import excel_io
 from ..agents import run_agent_with_structured_output
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
@@ -43,7 +44,7 @@ def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
 
                 valid_compounds = [s.model_dump() for s in result.compound_commands if store.exists("compound_command", s.name)]
                 valid_libs = [
-                    s.model_dump() for s in result.library_calls if store.exists("library_call", s.name.split("(")[0].strip())
+                    s.model_dump() for s in result.library_calls if store.exists("library_call", excel_io.leading_identifier(s.name))
                 ]
                 selections[req.req_id] = {"compound_commands": valid_compounds, "library_calls": valid_libs}
                 _logger.info(

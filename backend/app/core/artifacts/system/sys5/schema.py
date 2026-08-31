@@ -206,7 +206,17 @@ class TestStep(BaseModel):
     step_no: int
     phase: TestPhase
     keyword: StepKeyword
-    target_ref: Optional[str] = None       # signal/command/compound/tolerance/library name referenced
+    target_ref: Optional[str] = Field(
+        None,
+        description=(
+            "The bare real-world name this step references, exactly as it exists in the source "
+            "data, checked by the hallucination guardrail - e.g. 'MDL_SEN_Slope_Angle', "
+            "'Config_Tol_Spd', 'Compound Power_On_A1', or 'Lib_Ramp' (the library function's bare "
+            "name only, WITHOUT its parameter list or any placeholder/actual argument text - the "
+            "full call with real arguments belongs in step_text, not here). None/omitted for a "
+            "step with ref_kind='none' (e.g. a bare Wait)."
+        ),
+    )
     ref_kind: RefKind = "none"
     step_text: str                          # full literal step text as it should appear in the sheet
     parameter_settings: Optional[str] = None
