@@ -366,7 +366,34 @@ dry run of the pipeline (not just static review)**:
    Also gave `TestStep.target_ref` an explicit `Field` description so the LLM
    knows to put the bare name there, not the full call with arguments.
 
-2. **Functional/NonFunctional Requirement category collision.** The
+2. **litellm 400 on the gpt-oss-120b endpoint mid-run** (`... 1 validation
+   error for Message\ncontent.0\n  Input should be a valid dictionary or
+   instance of Content [...ValidatorIterator...]`), reported against a real
+   run once an agent's conversation history included a completed tool call.
+   Traced (by reading the installed `langchain_openai` source directly,
+   since `reference.langchain.com`/`docs.langchain.com` are unreachable from
+   this sandbox) to `langchain-openai>=1.0`'s default `AIMessage` output
+   format change (`output_version="responses/v1"`, a list of typed content
+   blocks, replacing the pre-1.0 plain-string `content`) - not reliably
+   compatible with every OpenAI-*compatible* self-hosted backend, and this
+   endpoint is exactly that: an internal litellm proxy in front of a
+   self-hosted `gpt-oss-120b` via vLLM, not real OpenAI. Matches a known,
+   already-filed LangChain issue against this same model family
+   (https://github.com/langchain-ai/langchain/issues/34751). Fixed in
+   `llm.py`'s `get_llm()`: `output_version="v0"` (the officially documented
+   backwards-compatibility value - plain-string content again) and
+   `use_responses_api=False` (this proxy only speaks Chat Completions, so
+   there's never a reason to let LangChain's own auto-detection consider the
+   Responses API). `output_version` is exposed as
+   `pipeline_config.llm_output_version` (default `"v0"`) in case a future
+   endpoint needs a different value. If this class of error recurs despite
+   the fix, the next lever to try - no code change needed - is
+   `pipeline_config.json`'s `use_native_structured_output: false`, which
+   avoids `response_format=`/`AutoStrategy` for the structuring step
+   entirely (see `agents.py`'s module docstring on the native vs. manual
+   structured-output path).
+
+3. **Functional/NonFunctional Requirement category collision.** The
    Requirement-sheet Category fast-path (`requirements_extract.py`) fuzzy-
    matches a row's raw Category text against the known vocabulary at
    `category_match_threshold` (was 85). `rapidfuzz.token_sort_ratio` scores
@@ -385,3 +412,21 @@ dry run of the pipeline (not just static review)**:
    (`NonFunctional Requirement`, `Configuration Requirement`,
    `Security Requirement`), even a clean non-ambiguous match, is recognized
    and then dropped, never appearing in `requirements` *or* `heading_info`.
+
+4. **Pydantic `ValidationError` on a numeric master-sheet cell**, reported
+   against a real input file (`AppParameter.valid_value: Input should be a
+   valid string (type=string_type, input_value=300, input_type=int)`).
+   `comm_matrix_extract.py`, `app_param_extract.py`, and `io_signal_extract.py`
+   passed raw `row.get(...)` cell values straight into `CommMatrixSignal`/
+   `AppParameter`/`IOSignal`, all typed as plain `str` fields - openpyxl reads
+   a numeric-looking cell (e.g. a parameter's valid/default value) as a real
+   Python `int`/`float`, and pydantic v2 does not coerce non-`str` input into
+   a `str` field. Every other loader in this codebase (`workbook_store.py`'s
+   own `_load_*` methods, `requirements_extract.py`) already wraps raw cell
+   values in `excel_io._norm()` first; these three were the only ones that
+   didn't, because the synthetic test fixtures write every cell as an
+   already-quoted string literal and never exercised a genuinely numeric
+   one. Fixed with a local `_s()` helper in each of the three files, plus
+   `tests/test_master_sheet_extract_nodes.py`, which feeds literal Python
+   `int`/`float` values (mirroring real openpyxl output) through each node
+   directly to reproduce the exact reported crash.

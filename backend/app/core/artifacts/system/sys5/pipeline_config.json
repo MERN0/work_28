@@ -6,6 +6,7 @@
   "llm_max_retries": 3,
   "llm_timeout_seconds": 120,
   "structured_output_max_retries": 2,
+  "llm_output_version": "v0",
 
   "header_row_match_threshold": 75,
   "column_match_threshold": 75,

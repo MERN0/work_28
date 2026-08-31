@@ -33,6 +33,23 @@ class PipelineConfig:
     # Retries for the (fallback, non-native) structured-output shaping call -
     # see agents.py. Separate from llm_max_retries, which is HTTP-level retry.
     structured_output_max_retries: int = 2
+    # `ChatOpenAI(output_version=...)` - "v0" keeps AIMessage.content a plain
+    # string (langchain-openai's pre-1.0 format) instead of the >=1.0 default
+    # ("responses/v1"), a list of typed content blocks. The SYS5 endpoint is
+    # an internal litellm proxy in front of a self-hosted, non-OpenAI model
+    # (gpt-oss-120b via vLLM), not real OpenAI - it does not reliably round-
+    # trip the newer block format through a multi-turn tool-calling
+    # conversation (confirmed against a real run: litellm rejected a
+    # follow-up request with a "Message content.0 ... ValidatorIterator"
+    # pydantic error once prior turns included tool calls - a known
+    # LangChain/vLLM/gpt-oss compatibility gap, see
+    # https://github.com/langchain-ai/langchain/issues/34751). "v0" is the
+    # official, documented backwards-compatibility value for exactly this -
+    # see llm.py's docstring. See get_llm() for `use_responses_api=False`,
+    # set unconditionally alongside this rather than as a config knob, since
+    # this proxy is Chat-Completions-only and there is never a reason to
+    # let LangChain's auto-detection consider the Responses API for it.
+    llm_output_version: str = "v0"
 
     # -- Fuzzy-matching thresholds (0-100, higher = stricter) ---------------
     header_row_match_threshold: int = 75      # locating a sheet's header row among title/banner rows
