@@ -14,10 +14,13 @@ from pydantic import BaseModel
 
 from .. import excel_io
 from ..agents import run_agent_with_structured_output
+from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
 from ..schema import HeadingInfoRow, Requirement
 from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
+
+_logger = get_logger(__name__)
 
 _KNOWN_CATEGORIES = [
     "Heading",
@@ -27,7 +30,6 @@ _KNOWN_CATEGORIES = [
     "NonFunctional Requirement",
     "Security Requirement",
 ]
-_FUZZY_THRESHOLD = 85
 
 
 class _ClassifiedRow(BaseModel):
@@ -57,51 +59,59 @@ def _to_requirement(row: dict) -> Requirement:
     )
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list):
+def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
+    threshold = pipeline_config.category_match_threshold if pipeline_config else 85
+
     def node(state: PipelineState) -> PipelineState:
-        rows = store.get_requirement_rows()
+        with stage_timer(_logger, "requirements_extract"):
+            rows = store.get_requirement_rows()
 
-        clean: list[tuple[dict, str]] = []
-        ambiguous: list[tuple[int, dict]] = []
-        for i, row in enumerate(rows):
-            raw_category = row.get("Category")
-            match = excel_io.fuzzy_find(raw_category, _KNOWN_CATEGORIES, threshold=_FUZZY_THRESHOLD)
-            if match:
-                clean.append((row, match))
-            elif excel_io._norm(raw_category):
-                ambiguous.append((i, row))
-            # a genuinely blank Category is dropped silently (not a row worth classifying)
+            clean: list[tuple[dict, str]] = []
+            ambiguous: list[tuple[int, dict]] = []
+            for i, row in enumerate(rows):
+                raw_category = row.get("Category")
+                match = excel_io.fuzzy_find(raw_category, _KNOWN_CATEGORIES, threshold=threshold)
+                if match:
+                    clean.append((row, match))
+                elif excel_io._norm(raw_category):
+                    ambiguous.append((i, row))
+                # a genuinely blank Category is dropped silently (not a row worth classifying)
 
-        if ambiguous:
-            listing = "\n".join(
-                f"[{i}] Category={row.get('Category')!r} Requirement Description={row.get('Requirement Description')!r}"
-                for i, row in ambiguous
-            )
-            prompt = get_prompt("requirements_extract")
-            user_input = (
-                "The following requirement-sheet rows have a Category value that didn't cleanly match "
-                f"one of: {_KNOWN_CATEGORIES}. Classify each into exactly one of those values.\n\n{listing}"
-            )
-            result, _ = run_agent_with_structured_output(llm, tools, prompt, user_input, _ClassificationBatch)
-            decided = {c.row_index: c.category for c in result.rows}
-            for i, row in ambiguous:
-                category = decided.get(i)
-                if category in _KNOWN_CATEGORIES:
-                    clean.append((row, category))
+            _logger.info("requirement sheet: %d row(s), %d classified via fast-path, %d ambiguous", len(rows), len(clean), len(ambiguous))
 
-        requirements: list[Requirement] = []
-        heading_info: list[HeadingInfoRow] = []
-        for row, category in clean:
-            if category == "Functional Requirement":
-                requirements.append(_to_requirement(row))
-            elif category in ("Heading", "Information"):
-                heading_info.append(
-                    HeadingInfoRow(
-                        req_id=excel_io._norm(row.get("Requirement ID")) or None,
-                        description=excel_io._norm(row.get("Requirement Description")),
-                        category=category,
-                    )
+            if ambiguous:
+                listing = "\n".join(
+                    f"[{i}] Category={row.get('Category')!r} Requirement Description={row.get('Requirement Description')!r}"
+                    for i, row in ambiguous
                 )
+                prompt = get_prompt("requirements_extract")
+                user_input = (
+                    "The following requirement-sheet rows have a Category value that didn't cleanly match "
+                    f"one of: {_KNOWN_CATEGORIES}. Classify each into exactly one of those values.\n\n{listing}"
+                )
+                result, _ = run_agent_with_structured_output(
+                    llm, tools, prompt, user_input, _ClassificationBatch, pipeline_config=pipeline_config
+                )
+                decided = {c.row_index: c.category for c in result.rows}
+                for i, row in ambiguous:
+                    category = decided.get(i)
+                    if category in _KNOWN_CATEGORIES:
+                        clean.append((row, category))
+
+            requirements: list[Requirement] = []
+            heading_info: list[HeadingInfoRow] = []
+            for row, category in clean:
+                if category == "Functional Requirement":
+                    requirements.append(_to_requirement(row))
+                elif category in ("Heading", "Information"):
+                    heading_info.append(
+                        HeadingInfoRow(
+                            req_id=excel_io._norm(row.get("Requirement ID")) or None,
+                            description=excel_io._norm(row.get("Requirement Description")),
+                            category=category,
+                        )
+                    )
+            _logger.info("requirements_extract: %d functional requirement(s), %d heading/info row(s)", len(requirements), len(heading_info))
 
         return {**state, "requirements": requirements, "heading_info": heading_info}
 

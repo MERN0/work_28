@@ -6,8 +6,11 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..agents import run_agent_with_structured_output
+from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..workbook_store import InMemoryWorkbookStore
+
+_logger = get_logger(__name__)
 
 
 class _AmbiguousDecision(BaseModel):
@@ -19,7 +22,9 @@ class _AmbiguousBatch(BaseModel):
     decisions: list[_AmbiguousDecision]
 
 
-def extract_valid_rows(store: InMemoryWorkbookStore, sheet: str, feature_id: str, llm, tools: list) -> list[dict]:
+def extract_valid_rows(
+    store: InMemoryWorkbookStore, sheet: str, feature_id: str, llm, tools: list, pipeline_config=None
+) -> list[dict]:
     """Return raw row dicts (canonical field names, `_marker*` keys stripped)
     that are valid for `feature_id`: a clean 'O' via the deterministic
     fast-path, or an LLM-adjudicated True for anything ambiguous."""
@@ -34,6 +39,8 @@ def extract_valid_rows(store: InMemoryWorkbookStore, sheet: str, feature_id: str
         elif marker is None:
             ambiguous.append((i, row.get("_marker_raw"), clean))
 
+    _logger.info("%s: %d row(s) total, %d valid via fast-path, %d ambiguous", sheet, len(rows), len(valid), len(ambiguous))
+
     if ambiguous:
         listing = "\n".join(f"[{i}] marker_cell_content={raw!r} row={clean}" for i, raw, clean in ambiguous)
         prompt = get_prompt("marker_escalate")
@@ -42,7 +49,9 @@ def extract_valid_rows(store: InMemoryWorkbookStore, sheet: str, feature_id: str
             f"For each row below, the feature-column marker cell was not a clean 'O' or 'x'. "
             f"Decide VALID or NOT for each.\n\n{listing}"
         )
-        result, _ = run_agent_with_structured_output(llm, tools, prompt, user_input, _AmbiguousBatch)
+        result, _ = run_agent_with_structured_output(
+            llm, tools, prompt, user_input, _AmbiguousBatch, pipeline_config=pipeline_config
+        )
         decided = {d.row_index: d.valid for d in result.decisions}
         for i, raw, clean in ambiguous:
             if decided.get(i):

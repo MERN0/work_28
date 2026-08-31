@@ -1,0 +1,111 @@
+"""One place for every tunable engineering knob in the SYS5 pipeline: LLM
+connection/retry parameters, fuzzy-matching thresholds, retrieval shortlist
+sizes, concurrency, and logging. Everything here has a sensible default (the
+values already in use before this file existed) but can be overridden by
+editing `pipeline_config.json` directly - no code change needed.
+
+Load order (later wins): dataclass defaults -> pipeline_config.json (path
+from `SYS5_PIPELINE_CONFIG_PATH` env var, else the file next to this module)
+-> a small set of env vars for the LLM connection specifically (kept as env
+overrides, not committed to the JSON file, since they're commonly
+secrets/deployment-specific: SYS5_LLM_MODEL, SYS5_LLM_API_KEY,
+SYS5_LLM_API_BASE, SYS5_LLM_MAX_RETRIES, SYS5_LLM_TIMEOUT).
+"""
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+from dataclasses import dataclass, fields
+
+_DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "pipeline_config.json")
+
+
+@dataclass
+class PipelineConfig:
+    # -- LLM connection & call resilience -----------------------------------
+    llm_model: str = "llm-1-gpt-osx-120b"
+    llm_api_key: str = "sk-dfK6wRAt7vIiphRybrrdJQ"
+    llm_api_base: str = "http://10.1.2.186:4000"
+    llm_temperature: float = 0
+    llm_max_retries: int = 3
+    llm_timeout_seconds: int = 120
+    # Retries for the (fallback, non-native) structured-output shaping call -
+    # see agents.py. Separate from llm_max_retries, which is HTTP-level retry.
+    structured_output_max_retries: int = 2
+
+    # -- Fuzzy-matching thresholds (0-100, higher = stricter) ---------------
+    header_row_match_threshold: int = 75      # locating a sheet's header row among title/banner rows
+    column_match_threshold: int = 75          # matching a real column header to a canonical field name
+    sheet_name_match_threshold: int = 80      # matching a workbook's sheet name to an expected name
+    category_match_threshold: int = 85        # Requirement sheet Category value fast-path
+    command_match_threshold: int = 80         # Comm Matrix Signal name -> Command List Command name
+    model_input_match_threshold: int = 70     # factor value -> Model_Input_Mapping Test Case Input
+    hallucination_match_threshold: int = 92   # the anti-hallucination guardrail (store.exists) - deliberately strict
+    general_fuzzy_threshold: int = 90         # default for excel_io.fuzzy_equal/fuzzy_find when no other threshold applies
+
+    # -- Retrieval shortlist sizes --------------------------------------------
+    compound_command_shortlist_size: int = 20
+    library_shortlist_size: int = 20
+    command_lookup_top_k: int = 3
+
+    # -- Performance / concurrency --------------------------------------------
+    # How many test-pattern rows to generate+validate concurrently in
+    # test_case_loop.py. Each row is an independent unit of work (its own
+    # TestCaseState, its own LLM calls) so this is safe to raise; bounded by
+    # the LLM proxy's real concurrency headroom. 1 = fully sequential.
+    max_concurrent_test_cases: int = 4
+    # Run validate_pass1 and validate_pass2 as ONE combined LLM call (two
+    # rubrics, one round trip) instead of two separate calls. Roughly halves
+    # the validation stage's LLM round trips with no loss of rubric coverage.
+    # Set false to restore the original two-separate-calls behavior.
+    combine_validation_passes: bool = True
+    # Use the installed agent API's native response_format (when available)
+    # instead of always doing a second, separate structured-output call after
+    # the tool-use loop. See agents.py.
+    use_native_structured_output: bool = True
+
+    # -- Output ----------------------------------------------------------------
+    test_case_id_prefix: str = "TMHC_SQTC"
+
+    # -- Logging -----------------------------------------------------------
+    log_level: str = "INFO"
+    log_to_file: bool = True
+    log_file_name: str = "sys5_run.log"
+    log_format: str = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+    @classmethod
+    def load(cls, path: str | None = None) -> "PipelineConfig":
+        path = path or os.environ.get("SYS5_PIPELINE_CONFIG_PATH", _DEFAULT_CONFIG_PATH)
+        data: dict = {}
+        if path and os.path.isfile(path):
+            with open(path) as fh:
+                data = json.load(fh)
+
+        valid_fields = {f.name for f in fields(cls)}
+        unknown = set(data) - valid_fields
+        kwargs = {k: v for k, v in data.items() if k in valid_fields}
+        config = cls(**kwargs)
+        if unknown:
+            # Surfaced via logging (configured after this loads) as a warning
+            # by the caller, not raised - an unrecognized key in a hand-edited
+            # settings file shouldn't stop a run.
+            config._unknown_keys = unknown  # type: ignore[attr-defined]
+
+        env_overrides = {
+            "llm_model": os.environ.get("SYS5_LLM_MODEL"),
+            "llm_api_key": os.environ.get("SYS5_LLM_API_KEY"),
+            "llm_api_base": os.environ.get("SYS5_LLM_API_BASE"),
+        }
+        for key, value in env_overrides.items():
+            if value:
+                setattr(config, key, value)
+        if os.environ.get("SYS5_LLM_MAX_RETRIES"):
+            config.llm_max_retries = int(os.environ["SYS5_LLM_MAX_RETRIES"])
+        if os.environ.get("SYS5_LLM_TIMEOUT"):
+            config.llm_timeout_seconds = int(os.environ["SYS5_LLM_TIMEOUT"])
+
+        return config
+
+    def as_dict(self) -> dict:
+        return dataclasses.asdict(self)

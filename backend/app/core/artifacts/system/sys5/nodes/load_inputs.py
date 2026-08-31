@@ -6,9 +6,16 @@ already exist."""
 from __future__ import annotations
 
 from ..config import Settings
+from ..logging_utils import get_logger, stage_timer
+from ..pipeline_config import PipelineConfig
 from ..workbook_store import InMemoryWorkbookStore, resolve_input_files
 
+_logger = get_logger(__name__)
 
-def load_inputs(settings: Settings) -> InMemoryWorkbookStore:
-    file_paths = resolve_input_files(settings.input_folder_path, settings.req_filename, settings.uploaded_files)
-    return InMemoryWorkbookStore.load(file_paths, settings.req_sheet_name)
+
+def load_inputs(settings: Settings, pipeline_config: PipelineConfig) -> InMemoryWorkbookStore:
+    with stage_timer(_logger, "resolve_input_files", input_folder_path=settings.input_folder_path):
+        file_paths = resolve_input_files(settings.input_folder_path, settings.req_filename, settings.uploaded_files)
+    for role, path in file_paths.items():
+        _logger.info("input file resolved: %s -> %s", role, path)
+    return InMemoryWorkbookStore.load(file_paths, settings.req_sheet_name, pipeline_config)

@@ -4,9 +4,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..agents import run_agent_with_structured_output
+from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..schema import TestCase, TestStep
 from ..state import TestCaseState
+
+_logger = get_logger(__name__)
 
 
 class _GeneratedTestCase(BaseModel):
@@ -32,12 +35,16 @@ def _build_user_input(state: TestCaseState) -> str:
     )
 
 
-def build(llm, tools: list, settings):
+def build(llm, tools: list, settings, pipeline_config=None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
+        row = state["pattern_row"]
         context = state.get("context", {})
         prompt = get_prompt("generate", settings)
-        result, _ = run_agent_with_structured_output(llm, tools, prompt, _build_user_input(state), _GeneratedTestCase)
+        _logger.info("generating test case: req=%s scenario=%s", req.req_id, row.scenario_id)
+        result, _ = run_agent_with_structured_output(
+            llm, tools, prompt, _build_user_input(state), _GeneratedTestCase, pipeline_config=pipeline_config
+        )
 
         test_case = TestCase(
             test_case_id="PENDING",

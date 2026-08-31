@@ -1,23 +1,19 @@
-"""LLM client factory. Defaults match the example wiring given for this
-artifact exactly, overridable via env vars so a deployment can point at a
-different proxy/key without a code change."""
+"""LLM client factory. All defaults/overrides come from PipelineConfig (see
+pipeline_config.py / pipeline_config.json) - the single place to change the
+model, credentials, or retry/timeout behavior."""
 from __future__ import annotations
-
-import os
 
 from langchain_openai import ChatOpenAI
 
-_DEFAULT_MODEL = "llm-1-gpt-osx-120b"
-_DEFAULT_API_KEY = "sk-dfK6wRAt7vIiphRybrrdJQ"
-_DEFAULT_API_BASE = "http://10.1.2.186:4000"
+from .pipeline_config import PipelineConfig
 
 
-def get_llm(model: str | None = None, temperature: float = 0) -> ChatOpenAI:
+def get_llm(pipeline_config: PipelineConfig, model: str | None = None) -> ChatOpenAI:
     return ChatOpenAI(
-        model=model or os.environ.get("SYS5_LLM_MODEL", _DEFAULT_MODEL),
-        openai_api_key=os.environ.get("SYS5_LLM_API_KEY", _DEFAULT_API_KEY),
-        openai_api_base=os.environ.get("SYS5_LLM_API_BASE", _DEFAULT_API_BASE),
-        temperature=temperature,
-        max_retries=int(os.environ.get("SYS5_LLM_MAX_RETRIES", "3")),
-        request_timeout=int(os.environ.get("SYS5_LLM_TIMEOUT", "120")),
+        model=model or pipeline_config.llm_model,
+        openai_api_key=pipeline_config.llm_api_key,
+        openai_api_base=pipeline_config.llm_api_base,
+        temperature=pipeline_config.llm_temperature,
+        max_retries=pipeline_config.llm_max_retries,
+        request_timeout=pipeline_config.llm_timeout_seconds,
     )

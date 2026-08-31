@@ -12,10 +12,13 @@ from pydantic import BaseModel, Field
 
 from ..agents import run_agent_with_structured_output
 from ..factors import get_factor_table
+from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
 from ..schema import FactorTable, Requirement, TestPatternRow
 from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
+
+_logger = get_logger(__name__)
 
 
 class _ScenarioPlan(BaseModel):
@@ -53,7 +56,7 @@ def _expand(plan: _PatternPlan, table: FactorTable) -> list[TestPatternRow]:
     return rows
 
 
-def build(store: InMemoryWorkbookStore, llm, tools: list):
+def build(store: InMemoryWorkbookStore, llm, tools: list, pipeline_config=None):
     def node(state: PipelineState) -> PipelineState:
         table = get_factor_table(state["feature_id"])
         patterns: dict[str, list[TestPatternRow]] = {}
@@ -62,16 +65,20 @@ def build(store: InMemoryWorkbookStore, llm, tools: list):
         variable_desc = "\n".join(f"- {f.name}: {f.values}" for f in table.variable_factors)
 
         for req in state["requirements"]:
-            prompt = get_prompt("test_pattern_gen")
-            user_input = (
-                f"Requirement {req.req_id}: {req.description}\n"
-                f"Verification Criteria: {req.verification_criteria}\n"
-                f"Variant: {req.variant}\n\n"
-                f"Feature's fixed factors (combine combinatorially):\n{fixed_desc}\n\n"
-                f"Feature's variable factors (the transitions actually under test):\n{variable_desc}"
-            )
-            result, _ = run_agent_with_structured_output(llm, tools, prompt, user_input, _PatternPlan)
-            patterns[req.req_id] = _expand(result, table)
+            with stage_timer(_logger, "test_pattern_gen", req=req.req_id):
+                prompt = get_prompt("test_pattern_gen")
+                user_input = (
+                    f"Requirement {req.req_id}: {req.description}\n"
+                    f"Verification Criteria: {req.verification_criteria}\n"
+                    f"Variant: {req.variant}\n\n"
+                    f"Feature's fixed factors (combine combinatorially):\n{fixed_desc}\n\n"
+                    f"Feature's variable factors (the transitions actually under test):\n{variable_desc}"
+                )
+                result, _ = run_agent_with_structured_output(
+                    llm, tools, prompt, user_input, _PatternPlan, pipeline_config=pipeline_config
+                )
+                patterns[req.req_id] = _expand(result, table)
+                _logger.info("test_pattern_gen: req=%s -> %d test-pattern row(s)", req.req_id, len(patterns[req.req_id]))
 
         return {**state, "test_patterns": patterns}
 

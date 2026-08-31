@@ -5,9 +5,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from ..agents import run_agent_with_structured_output
+from ..logging_utils import get_logger
 from ..prompts import get_prompt
 from ..schema import TestCase, TestStep
 from ..state import TestCaseState
+
+_logger = get_logger(__name__)
 
 
 class _CorrectedTestCase(BaseModel):
@@ -24,11 +27,12 @@ def _collect_issues(state: TestCaseState) -> list[str]:
     return issues
 
 
-def build(llm, tools: list, settings):
+def build(llm, tools: list, settings, pipeline_config=None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
         test_case = state["test_case"]
         issues = _collect_issues(state)
+        _logger.info("correcting test case: req=%s issues=%d", req.req_id, len(issues))
 
         prompt = get_prompt("correct", settings)
         user_input = (
@@ -36,7 +40,9 @@ def build(llm, tools: list, settings):
             f"Original test case:\n{test_case.model_dump_json(indent=2)}\n\n"
             f"Issues to resolve:\n" + "\n".join(f"- {i}" for i in issues)
         )
-        result, _ = run_agent_with_structured_output(llm, tools, prompt, user_input, _CorrectedTestCase)
+        result, _ = run_agent_with_structured_output(
+            llm, tools, prompt, user_input, _CorrectedTestCase, pipeline_config=pipeline_config
+        )
 
         corrected = test_case.model_copy(update={"description": result.description, "steps": result.steps})
         return {**state, "test_case": corrected, "issues": [], "correction_attempted": True}

@@ -242,6 +242,14 @@ class ValidationResult(BaseModel):
     issues: list[ValidationIssue] = Field(default_factory=list)
 
 
+class CombinedValidationResult(BaseModel):
+    """Both validation rubrics answered in one LLM call (see
+    pipeline_config.combine_validation_passes / nodes/validate.py::build_combined) -
+    still two distinct ValidationResult objects, just produced together."""
+    fidelity: ValidationResult
+    plausibility: ValidationResult
+
+
 # --------------------------------------------------------------------------
 # Run manifest
 # --------------------------------------------------------------------------

@@ -7,10 +7,13 @@ call with no pause/resume requirement.
 """
 from __future__ import annotations
 
+import time
+
 from langgraph.graph import END, StateGraph
 
 from .config import Settings
 from .llm import get_llm
+from .logging_utils import get_logger, stage_timer
 from .nodes import (
     app_param_extract,
     comm_matrix_extract,
@@ -29,10 +32,13 @@ from .nodes import (
     test_pattern_gen,
     validate,
 )
+from .pipeline_config import PipelineConfig
 from .schema import Requirement
 from .state import PipelineState, TestCaseState
 from .tools import build_tools
 from .workbook_store import InMemoryWorkbookStore
+
+_logger = get_logger(__name__)
 
 
 def route_after_hallucination(state: TestCaseState) -> str:
@@ -54,28 +60,47 @@ def route_after_pass2(state: TestCaseState) -> str:
     return "correct"
 
 
-def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list, settings: Settings):
+def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, tools: list, settings: Settings, pipeline_config: PipelineConfig):
     """One node per validation-loop stage; conditional edges implement the
-    '2 validation passes + 1 correction attempt' rule from plan §E."""
+    '2 validation passes + 1 correction attempt' rule from plan §E.
+
+    If pipeline_config.combine_validation_passes is set (default), both
+    rubrics run as one LLM call (validate.build_combined) instead of two
+    separate nodes - same routing logic either way, since route_after_pass2
+    only looks at pass1_result/pass2_result in state, not which node wrote them.
+    """
     graph = StateGraph(TestCaseState)
-    graph.add_node("generate", generate.build(llm, tools, settings))
-    graph.add_node("hallucination_check", hallucination_check.build(store))
-    graph.add_node("validate_pass1", validate.build_pass1(llm, tools, settings))
-    graph.add_node("validate_pass2", validate.build_pass2(llm, tools, settings))
-    graph.add_node("correct", correct.build(llm, tools, settings))
+    graph.add_node("generate", generate.build(llm, tools, settings, pipeline_config))
+    graph.add_node("hallucination_check", hallucination_check.build(store, pipeline_config))
+    graph.add_node("correct", correct.build(llm, tools, settings, pipeline_config))
     graph.add_node("finalize_pass", finalize_pass.build())
 
     graph.set_entry_point("generate")
     graph.add_edge("generate", "hallucination_check")
-    graph.add_conditional_edges(
-        "hallucination_check",
-        route_after_hallucination,
-        {"validate_pass1": "validate_pass1", "correct": "correct", "finalize_pass": "finalize_pass"},
-    )
-    graph.add_edge("validate_pass1", "validate_pass2")
-    graph.add_conditional_edges(
-        "validate_pass2", route_after_pass2, {"finalize_pass": "finalize_pass", "correct": "correct"}
-    )
+
+    if pipeline_config.combine_validation_passes:
+        graph.add_node("validate", validate.build_combined(llm, tools, settings, pipeline_config))
+        graph.add_conditional_edges(
+            "hallucination_check",
+            route_after_hallucination,
+            {"validate_pass1": "validate", "correct": "correct", "finalize_pass": "finalize_pass"},
+        )
+        graph.add_conditional_edges(
+            "validate", route_after_pass2, {"finalize_pass": "finalize_pass", "correct": "correct"}
+        )
+    else:
+        graph.add_node("validate_pass1", validate.build_pass1(llm, tools, settings, pipeline_config))
+        graph.add_node("validate_pass2", validate.build_pass2(llm, tools, settings, pipeline_config))
+        graph.add_conditional_edges(
+            "hallucination_check",
+            route_after_hallucination,
+            {"validate_pass1": "validate_pass1", "correct": "correct", "finalize_pass": "finalize_pass"},
+        )
+        graph.add_edge("validate_pass1", "validate_pass2")
+        graph.add_conditional_edges(
+            "validate_pass2", route_after_pass2, {"finalize_pass": "finalize_pass", "correct": "correct"}
+        )
+
     graph.add_edge("correct", "hallucination_check")
     graph.add_edge("finalize_pass", END)
     return graph.compile()
@@ -91,17 +116,19 @@ def _context_builder(state: PipelineState, req: Requirement) -> dict:
     }
 
 
-def _build_outer_graph(store: InMemoryWorkbookStore, llm, tools: list, settings: Settings, test_case_graph):
+def _build_outer_graph(
+    store: InMemoryWorkbookStore, llm, tools: list, settings: Settings, test_case_graph, pipeline_config: PipelineConfig
+):
     graph = StateGraph(PipelineState)
     graph.add_node("feature_index", feature_index.build(store))
-    graph.add_node("requirements_extract", requirements_extract.build(store, llm, tools))
-    graph.add_node("comm_matrix_extract", comm_matrix_extract.build(store, llm, tools))
-    graph.add_node("app_param_extract", app_param_extract.build(store, llm, tools))
-    graph.add_node("io_signal_extract", io_signal_extract.build(store, llm, tools))
-    graph.add_node("test_pattern_gen", test_pattern_gen.build(store, llm, tools))
-    graph.add_node("model_mapping_resolve", model_mapping_resolve.build(store, llm, tools))
-    graph.add_node("compound_command_map", compound_command_map.build(store, llm, tools))
-    graph.add_node("test_case_loop", test_case_loop.build(test_case_graph, _context_builder))
+    graph.add_node("requirements_extract", requirements_extract.build(store, llm, tools, pipeline_config))
+    graph.add_node("comm_matrix_extract", comm_matrix_extract.build(store, llm, tools, pipeline_config))
+    graph.add_node("app_param_extract", app_param_extract.build(store, llm, tools, pipeline_config))
+    graph.add_node("io_signal_extract", io_signal_extract.build(store, llm, tools, pipeline_config))
+    graph.add_node("test_pattern_gen", test_pattern_gen.build(store, llm, tools, pipeline_config))
+    graph.add_node("model_mapping_resolve", model_mapping_resolve.build(store, llm, tools, pipeline_config))
+    graph.add_node("compound_command_map", compound_command_map.build(store, llm, tools, pipeline_config))
+    graph.add_node("test_case_loop", test_case_loop.build(test_case_graph, _context_builder, pipeline_config))
     graph.add_node("output_assemble", output_assemble.build(settings))
 
     graph.set_entry_point("feature_index")
@@ -118,13 +145,26 @@ def _build_outer_graph(store: InMemoryWorkbookStore, llm, tools: list, settings:
     return graph.compile()
 
 
-def run_pipeline(settings: Settings) -> PipelineState:
-    store = load_inputs.load_inputs(settings)
-    llm = get_llm(settings.model)
+def run_pipeline(settings: Settings, pipeline_config: PipelineConfig | None = None) -> PipelineState:
+    pipeline_config = pipeline_config or PipelineConfig.load()
+    started = time.monotonic()
+    _logger.info(
+        "run_pipeline starting: feature=%s model=%s combine_validation_passes=%s max_concurrent_test_cases=%s",
+        settings.req_sheet_name, pipeline_config.llm_model,
+        pipeline_config.combine_validation_passes, pipeline_config.max_concurrent_test_cases,
+    )
+
+    with stage_timer(_logger, "load_inputs"):
+        store = load_inputs.load_inputs(settings, pipeline_config)
+    llm = get_llm(pipeline_config, model=settings.model or None)
     tools = build_tools(store)
 
-    inner_graph = _build_inner_test_case_graph(store, llm, tools, settings)
-    outer_graph = _build_outer_graph(store, llm, tools, settings, inner_graph)
+    inner_graph = _build_inner_test_case_graph(store, llm, tools, settings, pipeline_config)
+    outer_graph = _build_outer_graph(store, llm, tools, settings, inner_graph, pipeline_config)
 
     initial_state: PipelineState = {"feature_id": settings.req_sheet_name}
-    return outer_graph.invoke(initial_state)
+    with stage_timer(_logger, "outer_graph"):
+        final_state = outer_graph.invoke(initial_state)
+
+    _logger.info("run_pipeline finished in %.1fs total", time.monotonic() - started)
+    return final_state

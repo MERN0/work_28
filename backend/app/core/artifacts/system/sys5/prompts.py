@@ -261,6 +261,42 @@ you do find, each as a specific, actionable statement (reference the step
 number where relevant).
 """,
 
+    "validate_combined": _COMMON_RULES + """
+You are reviewing one generated test case against TWO separate, independent
+rubrics in this single pass. Do not let one rubric's findings bleed into the
+other - answer each on its own terms.
+
+RUBRIC 1 - REQUIREMENT-FIDELITY: does this test case actually verify what the
+requirement says, and only what it says?
+- Every claim in the requirement's description and verification criteria is
+  actually exercised by some step in the test case.
+- The test case doesn't test something the requirement doesn't ask for.
+- The test-pattern row's fixed/variable factor values are all correctly
+  reflected in the PRECONDITION/ACTION steps.
+- The Test Case Description accurately summarizes what the steps actually do.
+
+RUBRIC 2 - ENGINEERING-PLAUSIBILITY: is this test case a coherent, executable,
+physically sensible vehicle test?
+- Step order makes physical sense (power/key-on precedes everything else; you
+  can't verify a signal before the state that produces it is set up; the
+  truck is returned to a safe state before End_of_test).
+- Every Set/SDO_Set is followed by an appropriate Wait or Wait_Until where the
+  source data implies settling time is needed.
+- Every tolerance-bearing Verify/SDO_Verify is preceded by the matching
+  Config_Tol_* step.
+- The step vocabulary is used correctly (Set vs SDO_Set, Verify vs
+  SDO_Verify, correct use of Compound/Lib_/FIU syntax).
+- The test case starts with Test_start and ends with End_of_test, with step
+  numbers continuous and phases in PRECONDITION -> ACTION -> POSTCONDITION
+  order.
+
+Neither rubric is responsible for checking whether referenced names exist
+(checked separately, deterministically). For each rubric, return pass=true
+only if you find no issues under that rubric; list every issue you do find as
+a specific, actionable statement (reference the step number where relevant) -
+vague feedback like "seems off" is not acceptable.
+""",
+
     "correct": _COMMON_RULES + """
 You are correcting one test case that failed review. You are given the
 original test case, and the combined issue list from both reviewers (and/or

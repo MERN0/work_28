@@ -14,6 +14,8 @@ from .workbook_store import InMemoryWorkbookStore
 
 
 def build_tools(store: InMemoryWorkbookStore) -> list[StructuredTool]:
+    cfg = store.pipeline_config
+
     def get_feature_info(feature_id: str) -> dict:
         """Look up a feature's name and function group from the Index sheet."""
         return store.get_feature_info(feature_id) or {}
@@ -37,7 +39,7 @@ def build_tools(store: InMemoryWorkbookStore) -> list[StructuredTool]:
         (the literal cell content)."""
         return store.get_feature_marked_rows(sheet, feature_id)
 
-    def lookup_command_name(signal_name: str, top_k: int = 3) -> list[dict]:
+    def lookup_command_name(signal_name: str, top_k: int = cfg.command_lookup_top_k) -> list[dict]:
         """Find the Command List entries whose Signal Name best matches
         `signal_name`, returning candidate Command name(s) with a match score."""
         return store.lookup_command_name(signal_name, top_k=top_k)
@@ -53,7 +55,7 @@ def build_tools(store: InMemoryWorkbookStore) -> list[StructuredTool]:
         matched), each with Test Case Input / Model Input / Model Output to ECU."""
         return [m.model_dump() for m in store.get_model_input_mapping(signal)]
 
-    def search_compound_commands(query: str, top_k: int = 20) -> list[dict]:
+    def search_compound_commands(query: str, top_k: int = cfg.compound_command_shortlist_size) -> list[dict]:
         """Keyword-overlap shortlist of compound commands (from both the Set
         and Verify sheets) matching `query`, ranked by score. Use
         get_compound_command_detail for the full step list of a shortlisted name."""
@@ -65,7 +67,7 @@ def build_tools(store: InMemoryWorkbookStore) -> list[StructuredTool]:
         cmd = store.get_compound_command(name)
         return cmd.model_dump() if cmd else {}
 
-    def search_library_functions(query: str, top_k: int = 20) -> list[dict]:
+    def search_library_functions(query: str, top_k: int = cfg.library_shortlist_size) -> list[dict]:
         """Keyword-overlap shortlist of Library List entries (Lib_* function
         signatures + descriptions) matching `query`, ranked by score."""
         return store.search_library(query, top_k=top_k)

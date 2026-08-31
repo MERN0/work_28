@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import zipfile
 from datetime import datetime
 
@@ -24,6 +25,8 @@ if __package__ in (None, ""):
 
 from .config import Settings
 from .graph import run_pipeline
+from .logging_utils import configure_logging, get_logger
+from .pipeline_config import PipelineConfig
 from .schema import ProducedManifest
 
 
@@ -33,10 +36,20 @@ def generate(config: dict) -> str:
     settings.timestamp = timestamp  # stashed for _finalise, since the frozen block below doesn't pass it through
     os.makedirs(settings.output_dir, exist_ok=True)  # required before the frozen block's os.listdir()
 
-    final_state = run_pipeline(settings)
+    pipeline_config = PipelineConfig.load()
+    configure_logging(pipeline_config, output_dir=settings.output_dir)
+    logger = get_logger(__name__)
+    logger.info(
+        "SYS5 generate() starting: project=%s feature=%s output_dir=%s",
+        settings.project_name, settings.req_sheet_name, settings.output_dir,
+    )
+    started = time.monotonic()
+
+    final_state = run_pipeline(settings, pipeline_config)
     produced: ProducedManifest = final_state["manifest"]
     produced.started_at = timestamp
     produced.finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info("SYS5 generate() pipeline finished in %.1fs, writing zip archive", time.monotonic() - started)
 
     # ========================== Donot change ==========================
     zip_path = os.path.join(settings.output_dir, f"SYS5_{settings.project_name}_{timestamp}.zip")
@@ -54,11 +67,13 @@ def _finalise(produced: ProducedManifest, settings: Settings) -> str:
     path. Recomputes the zip path from `settings` rather than needing it
     passed in, since the frozen block above only receives (produced, settings)."""
     zip_path = os.path.join(settings.output_dir, f"SYS5_{settings.project_name}_{settings.timestamp}.zip")
-    print(
+    summary = (
         f"SYS5 generation complete for feature {produced.feature_id} ({produced.feature_name}): "
         f"{produced.requirement_count} requirement(s) -> {produced.test_case_count} test case(s) "
         f"({produced.flagged_count} flagged for review). Output: {zip_path}"
     )
+    get_logger(__name__).info(summary)
+    print(summary)
     return zip_path
 
 
