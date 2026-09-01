@@ -598,3 +598,23 @@ dry run of the pipeline (not just static review)**:
    fixture requirement's 12-row combinatorial expansion
    (`Truck Size(2) x Power Control Mode(3) x Direction Switch(2) x Load
    Capacity(1)`) now caps to 5 test cases as configured, 0 flagged.
+
+9. **`SDO_Set`/`SDO_Verify` deprecated - folded into plain `Set`/`Verify`**
+   (user-directed: the underlying keyword library no longer distinguishes a
+   CAN/SDO-sourced signal from a model-input one at the step-keyword level).
+   Removed both from `StepKeyword` in `schema.py`; `Set`/`Verify` now cover
+   every signal, model-input or CAN/SDO-sourced, and both still derive
+   `ref_kind="signal"` via `derive_ref_kind` (see finding 7 above) -
+   `store.exists()`'s signal branch already cross-checks the Command List as
+   well as the signal pool (also finding 7), so a real CAN_HIL_*/CAN_Main_*
+   name written under plain `Set`/`Verify` still validates correctly; no
+   change needed there. Updated the `generate` prompt's step vocabulary and
+   both validation rubrics to describe Set/Verify as covering both signal
+   sources and to call out SDO_Set/SDO_Verify as deprecated (so a model that
+   still reaches for the old keywords out of prior habit gets flagged and
+   corrected rather than silently passing). `tests/test_ref_kind_normalization.py`'s
+   mismatched-ref_kind regression case was re-targeted at `Compound` (the
+   `SDO_Set` example it used no longer type-checks against `StepKeyword`);
+   the dry-run driver's scripted stub was updated the same way and re-verified
+   end to end (5 test cases, 0 flagged, using `Set` for the CAN-sourced
+   `CAN_HIL_PwrCtrlMode`/`CAN_Main_Slope_Assist_Enabled_Disabled` steps).

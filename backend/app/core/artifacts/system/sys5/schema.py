@@ -28,7 +28,7 @@ RefKind = Literal[
 
 StepKeyword = Literal[
     "Test_start", "End_of_test",
-    "Set", "SDO_Set", "Verify", "SDO_Verify", "Wait", "Wait_Until",
+    "Set", "Verify", "Wait", "Wait_Until",
     "Read", "ReadStore", "Compound", "Config_Tol", "FIU", "Lib",
 ]
 
@@ -42,11 +42,18 @@ StepKeyword = Literal[
 # different ref_kinds - so generate.py/correct.py now overwrite whatever
 # ref_kind the LLM produced with `derive_ref_kind(step.keyword)` and never
 # trust the model's own answer for this field.
+#
+# `SDO_Set`/`SDO_Verify` (once the dedicated keywords for CAN/SDO-sourced
+# signals) are deprecated per user direction - Set/Verify now cover both
+# model-input and CAN/SDO-sourced signals uniformly. A Set/Verify step's
+# target_ref is still checked as ref_kind="signal", and `store.exists()`'s
+# signal branch already cross-checks the Command List too (see its own
+# comment), so a real CAN_HIL_*/CAN_Main_* name written under plain
+# Set/Verify still validates correctly.
 _KEYWORD_REF_KIND: dict[str, "RefKind"] = {
     "Test_start": "none", "End_of_test": "none", "Wait": "none",
     "Set": "signal", "Verify": "signal", "Wait_Until": "signal",
     "Read": "signal", "ReadStore": "signal", "FIU": "signal",
-    "SDO_Set": "command", "SDO_Verify": "command",
     "Compound": "compound_command",
     "Config_Tol": "tolerance",
     "Lib": "library_call",

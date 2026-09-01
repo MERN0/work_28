@@ -40,7 +40,7 @@ def build(llm, settings, pipeline_config=None):
             f"Requirement {req.req_id}: {req.description}\n\n"
             f"Original test case:\n{test_case.model_dump_json(indent=2)}\n\n"
             f"Issues to resolve:\n" + "\n".join(f"- {i}" for i in issues) + "\n\n"
-            f"This feature's valid signals, with their real Command List candidates for SDO_Set/SDO_Verify "
+            f"This feature's valid signals, with their real Command List candidates for CAN/SDO-sourced Set/Verify "
             f"(pick the best-scoring candidate - never invent a CAN_* name that isn't listed here):\n"
             + "\n".join(context.get("signal_reference", [])) + "\n"
             f"Available tolerances (Config_Tol_*):\n" + "\n".join(context.get("tolerances", [])) + "\n"

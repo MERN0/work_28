@@ -157,10 +157,8 @@ vocabulary - never invent a step keyword outside this list:
   Test_start                          - always step 1
   Compound <Command_Name>              - reference an already-selected compound command by its exact name
   Config_Tol_<Tolerance_Name>          - set a tolerance before a tolerance-bearing verification
-  Set <Signal_Name>                    - set a model-input (MDL_*) signal; Parameter Settings = value to set
-  SDO_Set <Signal_Name>                - set a CAN/SDO-sourced signal (CAN_HIL_*/CAN_Main_*); Parameter Settings = value
-  Verify <Signal_Name>                 - verify a model-input signal; Expected Value = value to verify
-  SDO_Verify <Signal_Name>             - verify a CAN/SDO-sourced signal; Expected Value = value
+  Set <Signal_Name>                    - set a signal (model-input MDL_* or CAN/SDO-sourced CAN_HIL_*/CAN_Main_*); Parameter Settings = value to set
+  Verify <Signal_Name>                 - verify a signal (model-input or CAN/SDO-sourced); Expected Value = value to verify
   Wait_Until <Signal_Name>             - wait until a signal reaches a condition; Expected Value = value to wait for
   Read <Signal_Name>                   - read and print a signal's value
   Read <Signal_Name>(StoreVariable)    - read a signal's value into a named temp variable
@@ -169,25 +167,20 @@ vocabulary - never invent a step keyword outside this list:
   Lib_<Name>(...)                      - a library function call exactly as documented (e.g. Lib_Ramp Signal_Name(Start=X,Stop=X,Step=X,Time=X))
   End_of_test                          - always the last step
 
-Use Set/Verify for model-input (MDL_*) signals and SDO_Set/SDO_Verify for
-CAN/SDO-sourced signals (CAN_HIL_*, CAN_Main_*) - judge which applies from
-where the signal actually came from in the source data (Model Input Mapping
-vs Comm Matrix/Command List), never guess. For example: a power/traction
-mode signal that only appears in the Comm Matrix/Command List (e.g. a
-"PwrCtrlMode"-style signal) is set/verified via SDO_Set/SDO_Verify; a
-sensor/switch signal that appears in Model Input Mapping (e.g. an
-"MDL_SEN_"/"MDL_SWH_"-prefixed signal) is set/verified via plain Set/Verify.
-For every SDO_Set/SDO_Verify step, the signal name you write MUST be one of
-the exact Command List candidates given to you for that signal below (the
-naming convention shown, e.g. "CAN_HIL_...", is real but you cannot derive a
-correct name from the pattern alone - always copy it verbatim from the
-candidate list; if none of a signal's candidates are a plausible match, use
-a different, real signal instead of inventing one).
+Set/Verify cover BOTH model-input (MDL_*) signals and CAN/SDO-sourced
+signals (CAN_HIL_*, CAN_Main_*) - there is no separate SDO_Set/SDO_Verify
+keyword (deprecated; use plain Set/Verify for every signal regardless of
+where it came from in the source data). For a CAN/SDO-sourced signal, the
+signal name you write MUST be one of the exact Command List candidates
+given to you for that signal below (the naming convention shown, e.g.
+"CAN_HIL_...", is real but you cannot derive a correct name from the
+pattern alone - always copy it verbatim from the candidate list; if none of
+a signal's candidates are a plausible match, use a different, real signal
+instead of inventing one).
 
 A "Compound <Command_Name>" step is atomic - it already fully implements
 whatever it does internally. Never separately re-emit its internal
-signals/steps as your own Set/Verify/SDO_Set/SDO_Verify steps; reference it
-by name only.
+signals/steps as your own Set/Verify steps; reference it by name only.
 
 Parameter Settings/Expected Value for a fixed- or variable-factor value MUST
 be copied verbatim from "Fixed factor values"/"Variable factor transitions"/
@@ -210,7 +203,7 @@ Structure the steps into three phases, in this order:
                   implies a settling delay is needed.
   ACTION        - exercise the variable-factor transition(s) under test and
                   verify the requirement's expected behavior, using
-                  Wait_Until/Verify/SDO_Verify/library calls as appropriate,
+                  Wait_Until/Verify/library calls as appropriate,
                   applying Config_Tol_* before any tolerance-bearing
                   verification.
   POSTCONDITION - return the truck to a safe/neutral state (ramp inputs back
@@ -293,17 +286,18 @@ Check:
   system state that produces it has been set up; power/key-on precedes
   everything else; the truck is returned to a safe state before
   End_of_test).
-- Every Set/SDO_Set is followed by an appropriate Wait or Wait_Until where
+- Every Set is followed by an appropriate Wait or Wait_Until where
   the source data implies settling time is needed.
-- Every tolerance-bearing Verify/SDO_Verify is preceded by the matching
+- Every tolerance-bearing Verify is preceded by the matching
   Config_Tol_* step.
 - Every Parameter Settings/Expected Value for a fixed- or variable-factor
   value is the exact short form given (e.g. "FWD"/"P"/"NL"), never a
   spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
 - Every step whose value has a matching tolerance has its Units (and Units2
   for a Verify's Expected Value) filled in from that tolerance, never blank.
-- The step vocabulary is used correctly (Set vs SDO_Set, Verify vs
-  SDO_Verify, correct use of Compound/Lib_/FIU syntax).
+- The step vocabulary is used correctly (no deprecated SDO_Set/SDO_Verify -
+  every signal, model-input or CAN/SDO-sourced, uses plain Set/Verify;
+  correct use of Compound/Lib_/FIU syntax).
 - The test case starts with Test_start and ends with End_of_test, with
   step numbers continuous and phases in PRECONDITION -> ACTION ->
   POSTCONDITION order.
@@ -348,17 +342,18 @@ physically sensible vehicle test?
 - Step order makes physical sense (power/key-on precedes everything else; you
   can't verify a signal before the state that produces it is set up; the
   truck is returned to a safe state before End_of_test).
-- Every Set/SDO_Set is followed by an appropriate Wait or Wait_Until where the
+- Every Set is followed by an appropriate Wait or Wait_Until where the
   source data implies settling time is needed.
-- Every tolerance-bearing Verify/SDO_Verify is preceded by the matching
+- Every tolerance-bearing Verify is preceded by the matching
   Config_Tol_* step.
 - Every Parameter Settings/Expected Value for a fixed- or variable-factor
   value is the exact short form given (e.g. "FWD"/"P"/"NL"), never a
   spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
 - Every step whose value has a matching tolerance has its Units (and Units2
   for a Verify's Expected Value) filled in from that tolerance, never blank.
-- The step vocabulary is used correctly (Set vs SDO_Set, Verify vs
-  SDO_Verify, correct use of Compound/Lib_/FIU syntax).
+- The step vocabulary is used correctly (no deprecated SDO_Set/SDO_Verify -
+  every signal, model-input or CAN/SDO-sourced, uses plain Set/Verify;
+  correct use of Compound/Lib_/FIU syntax).
 - The test case starts with Test_start and ends with End_of_test, with step
   numbers continuous and phases in PRECONDITION -> ACTION -> POSTCONDITION
   order.

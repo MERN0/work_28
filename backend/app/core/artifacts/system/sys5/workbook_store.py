@@ -571,13 +571,11 @@ class InMemoryWorkbookStore:
             candidates += [row.get("Signal name") or row.get("Signal Name") or "" for row in self._all_signal_rows()]
             candidates += [row.get("Signal ID") or "" for row in self._all_signal_rows()]
             candidates += [row.get("Logical Signal Name") or "" for row in self._all_signal_rows()]
-            # A real name that exists, just on the "other side" of the
-            # signal/command distinction (e.g. keyword=Set instead of
-            # SDO_Set, or the model-input-vs-CAN-sourced judgment call was
-            # wrong) still passed a real name - the existence guardrail's job
-            # is "is this real", not "did you pick the stylistically perfect
-            # keyword for it" (a wrong keyword choice is a plausibility
-            # concern, catchable by validate_pass2, not a hallucination).
+            # Set/Verify cover both model-input and CAN/SDO-sourced signals
+            # (the old dedicated SDO_Set/SDO_Verify keywords are deprecated -
+            # see schema.py), so a Set/Verify step's target_ref may be a real
+            # Command List name rather than a Comm Matrix/Model Input one -
+            # check both pools before failing.
             candidates += [c.command_name for c in self.command_list]
         elif ref_kind == "command":
             candidates = [c.command_name for c in self.command_list]

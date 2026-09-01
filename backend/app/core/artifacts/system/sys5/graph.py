@@ -161,7 +161,7 @@ def _build_signal_reference(store: InMemoryWorkbookStore, state: PipelineState) 
         cand_text = ", ".join(f"{c['command_name']!r} (match {c['score']:.0f})" for c in candidates) or "no Command List match found"
         lines.append(
             f"- Logical Signal Name={sig.logical_signal_name!r} Signal Name={sig.signal_name!r} "
-            f"- Command List candidates for SDO_Set/SDO_Verify: {cand_text}"
+            f"- Command List candidates for this CAN/SDO-sourced signal's Set/Verify: {cand_text}"
         )
     for sig in state.get("io_signal_valid", []):
         if sig.logical_signal_name:

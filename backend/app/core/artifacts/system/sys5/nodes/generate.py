@@ -43,7 +43,7 @@ def _build_user_input(state: TestCaseState) -> str:
         f"Variable factor transitions: {row.variable_transitions}\n\n"
         f"Resolved factor signal mappings (factor::value -> signal/model_input/model_output_to_ecu):\n"
         f"{context.get('factor_signal_resolutions', {})}\n\n"
-        f"This feature's valid signals, with their real Command List candidates for SDO_Set/SDO_Verify "
+        f"This feature's valid signals, with their real Command List candidates for CAN/SDO-sourced Set/Verify "
         f"(pick the best-scoring candidate for the exact signal you need - never invent a CAN_* name that "
         f"isn't listed as a candidate here, even if it looks like it follows the naming pattern):\n"
         + "\n".join(context.get("signal_reference", [])) + "\n\n"

@@ -1,11 +1,11 @@
 """Regression tests for a real production bug: `TestStep.ref_kind` used to be
 filled in by the LLM independently of `TestStep.keyword`, so a step's keyword
-and ref_kind could disagree (e.g. keyword=SDO_Set but ref_kind=signal) -
-hallucination_check then checked a real CAN_Main_*/CAN_HIL_* name against the
-wrong candidate pool and failed a name that actually existed. `keyword` alone
-determines what a step references; nothing else needs to (or should) decide
-it. These tests cover both the pure mapping (`schema.derive_ref_kind`) and
-that `generate.py`/`correct.py` actually overwrite whatever ref_kind the LLM
+and ref_kind could disagree (e.g. keyword=Compound but ref_kind=signal) -
+hallucination_check then checked a real name against the wrong candidate
+pool and failed a name that actually existed. `keyword` alone determines
+what a step references; nothing else needs to (or should) decide it. These
+tests cover both the pure mapping (`schema.derive_ref_kind`) and that
+`generate.py`/`correct.py` actually overwrite whatever ref_kind the LLM
 produced rather than trusting it.
 """
 from __future__ import annotations
@@ -25,8 +25,6 @@ def test_derive_ref_kind_covers_every_keyword():
     assert derive_ref_kind("Read") == "signal"
     assert derive_ref_kind("ReadStore") == "signal"
     assert derive_ref_kind("FIU") == "signal"
-    assert derive_ref_kind("SDO_Set") == "command"
-    assert derive_ref_kind("SDO_Verify") == "command"
     assert derive_ref_kind("Compound") == "compound_command"
     assert derive_ref_kind("Config_Tol") == "tolerance"
     assert derive_ref_kind("Lib") == "library_call"
@@ -42,8 +40,8 @@ def _row() -> TestPatternRow:
 
 def _mismatched_step() -> TestStep:
     # An LLM answer that gets the ref_kind wrong for its own keyword - the
-    # exact shape of the real bug (SDO_Set keyword, but ref_kind=signal).
-    return TestStep(step_no=1, phase="ACTION", keyword="SDO_Set", target_ref="CAN_HIL_PwrCtrlMode", ref_kind="signal", step_text="SDO_Set CAN_HIL_PwrCtrlMode")
+    # exact shape of the real bug (Compound keyword, but ref_kind=signal).
+    return TestStep(step_no=1, phase="ACTION", keyword="Compound", target_ref="Power_On_A1", ref_kind="signal", step_text="Compound Power_On_A1")
 
 
 def test_generate_overwrites_llm_ref_kind_from_keyword(monkeypatch):
@@ -58,8 +56,8 @@ def test_generate_overwrites_llm_ref_kind_from_keyword(monkeypatch):
     result = node(state)
 
     step = result["test_case"].steps[0]
-    assert step.keyword == "SDO_Set"
-    assert step.ref_kind == "command"  # not "signal", regardless of what the LLM said
+    assert step.keyword == "Compound"
+    assert step.ref_kind == "compound_command"  # not "signal", regardless of what the LLM said
 
 
 def test_correct_overwrites_llm_ref_kind_from_keyword(monkeypatch):
@@ -77,5 +75,5 @@ def test_correct_overwrites_llm_ref_kind_from_keyword(monkeypatch):
     result = node(state)
 
     step = result["test_case"].steps[0]
-    assert step.keyword == "SDO_Set"
-    assert step.ref_kind == "command"
+    assert step.keyword == "Compound"
+    assert step.ref_kind == "compound_command"
