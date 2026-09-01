@@ -1,57 +1,22 @@
-"""Shared hybrid deterministic-fast-path + LLM-escalation logic (plan
-Decision 6), used by comm_matrix_extract, app_param_extract, io_signal_extract.
-"""
+"""Shared deterministic row-filtering logic used by comm_matrix_extract,
+app_param_extract, io_signal_extract: keep exactly the rows whose
+feature-column marker cell is a clean 'O' (`excel_io.is_marked_valid`, via
+`InMemoryWorkbookStore.get_feature_marked_rows`). No LLM call - a marker
+cell that isn't a clean O/x is simply not valid (see workbook_store.py's
+`get_feature_marked_rows` for the diagnostic logging that keeps a
+non-standard source file visible without needing a judgment call here)."""
 from __future__ import annotations
 
-from pydantic import BaseModel
-
-from ..agents import call_llm
 from ..logging_utils import get_logger
-from ..prompts import get_prompt
 from ..workbook_store import InMemoryWorkbookStore
 
 _logger = get_logger(__name__)
 
 
-class _AmbiguousDecision(BaseModel):
-    row_index: int
-    valid: bool
-
-
-class _AmbiguousBatch(BaseModel):
-    decisions: list[_AmbiguousDecision]
-
-
-def extract_valid_rows(
-    store: InMemoryWorkbookStore, sheet: str, feature_id: str, llm, pipeline_config=None
-) -> list[dict]:
+def extract_valid_rows(store: InMemoryWorkbookStore, sheet: str, feature_id: str) -> list[dict]:
     """Return raw row dicts (canonical field names, `_marker*` keys stripped)
-    that are valid for `feature_id`: a clean 'O' via the deterministic
-    fast-path, or an LLM-adjudicated True for anything ambiguous."""
+    that are valid for `feature_id`: a clean 'O' marker."""
     rows = store.get_feature_marked_rows(sheet, feature_id)
-    valid: list[dict] = []
-    ambiguous: list[tuple[int, object, dict]] = []
-    for i, row in enumerate(rows):
-        clean = {k: v for k, v in row.items() if not k.startswith("_")}
-        marker = row.get("_marker")
-        if marker is True:
-            valid.append(clean)
-        elif marker is None:
-            ambiguous.append((i, row.get("_marker_raw"), clean))
-
-    _logger.info("%s: %d row(s) total, %d valid via fast-path, %d ambiguous", sheet, len(rows), len(valid), len(ambiguous))
-
-    if ambiguous:
-        listing = "\n".join(f"[{i}] marker_cell_content={raw!r} row={clean}" for i, raw, clean in ambiguous)
-        prompt = get_prompt("marker_escalate")
-        user_input = (
-            f"Sheet: {sheet}\nFeature id: {feature_id}\n\n"
-            f"For each row below, the feature-column marker cell was not a clean 'O' or 'x'. "
-            f"Decide VALID or NOT for each.\n\n{listing}"
-        )
-        result = call_llm(llm, prompt, user_input, _AmbiguousBatch, pipeline_config=pipeline_config)
-        decided = {d.row_index: d.valid for d in result.decisions}
-        for i, raw, clean in ambiguous:
-            if decided.get(i):
-                valid.append(clean)
+    valid = [{k: v for k, v in row.items() if not k.startswith("_")} for row in rows if row.get("_marker")]
+    _logger.info("%s: %d row(s) total, %d valid", sheet, len(rows), len(valid))
     return valid

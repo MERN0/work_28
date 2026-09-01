@@ -117,18 +117,14 @@ def find_feature_column(headers: list[Any], feature_id: str) -> Optional[int]:
     return None
 
 
-def is_marked_valid(cell_value: Any) -> Optional[bool]:
-    """Deterministic fast-path for the O/x validity marker (per plan Decision 6).
-    True for a clean 'O', False for a clean 'x'/'X' or a blank cell, None if the
-    cell is anything else - callers escalate None cases to an LLM."""
-    s = _norm(cell_value)
-    if s == "":
-        return False
-    if s.upper() == "O":
-        return True
-    if s.upper() == "X":
-        return False
-    return None
+def is_marked_valid(cell_value: Any) -> bool:
+    """Deterministic O/x validity marker: True only for a clean 'O' (case-
+    insensitive), False for everything else (blank, 'x'/'X', or any other,
+    unexpected cell content). No ambiguous case - a value that isn't a plain
+    O/x is simply not a valid marker; workbook_store.get_feature_marked_rows
+    logs any such non-standard value it sees so a genuinely non-conforming
+    source file is still visible, rather than silently mis-decided."""
+    return _norm(cell_value).upper() == "O"
 
 
 def rows_as_dicts(

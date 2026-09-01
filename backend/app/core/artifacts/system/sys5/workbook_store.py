@@ -6,7 +6,9 @@ here (loading) and once at the very end (writing the output workbooks).
 Row *reading* here is purely mechanical (never invents/interprets a value).
 Row *validity* (O/x, category classification) is left to callers: this store
 exposes the raw marker/category text plus the excel_io fast-path helpers, and
-callers (nodes) decide whether to trust the fast path or escalate to an LLM.
+callers (nodes) apply those deterministically - no LLM involved in deciding
+what a row means, only in generating/validating/correcting test case content
+(see nodes/generate.py, validate.py, correct.py).
 """
 from __future__ import annotations
 
@@ -454,9 +456,9 @@ class InMemoryWorkbookStore:
     def get_feature_marked_rows(self, sheet: str, feature_id: str) -> list[dict[str, Any]]:
         """Return every row of `sheet` ('comm_matrix' | 'app_param' | 'io_signal')
         keyed by canonical field names (fuzzy-resolved against the sheet's real
-        headers), annotated with a `_marker` field: True/False from the
-        deterministic O/x fast-path, or None if the cell needs LLM escalation
-        (Decision 6)."""
+        headers), annotated with a `_marker` field: the deterministic O/x
+        validity marker (`excel_io.is_marked_valid` - True only for a clean
+        'O', False for everything else)."""
         headers, matrix, header_row = {
             "comm_matrix": (self.comm_matrix_headers, self.comm_matrix_matrix, self.comm_matrix_header_row),
             "app_param": (self.app_param_headers, self.app_param_matrix, self.app_param_header_row),
@@ -476,27 +478,36 @@ class InMemoryWorkbookStore:
         )
         col_map = self._resolve_columns(headers, self._SHEET_FIELD_CANDIDATES[sheet])
         rows = excel_io.rows_as_dicts(matrix, header_row, col_map)
-        raw_value_counts: dict[str, int] = {}
+        # Distinct non-standard raw cell values seen (anything that isn't a
+        # plain blank/O/X) - logged below so a source file that uses a
+        # lookalike Unicode character, a checkmark, or a formula result
+        # instead of a plain ASCII O/x is still visible, even though such a
+        # cell now deterministically resolves to "not valid" rather than
+        # escalating anywhere for a judgment call.
+        nonstandard_counts: dict[str, int] = {}
         for i, row in enumerate(rows):
             raw_row = matrix[header_row + 1 + i]
             marker_cell = raw_row[col_idx] if col_idx < len(raw_row) else None
             row["_marker"] = excel_io.is_marked_valid(marker_cell)
             row["_marker_raw"] = marker_cell
-            key = repr(marker_cell)
-            raw_value_counts[key] = raw_value_counts.get(key, 0) + 1
-        if rows and not any(row["_marker"] is True for row in rows):
-            # Every row for this feature needed LLM escalation (or was
-            # dropped as a clean 'x'/blank) - suspicious if this happens on
-            # every sheet for a feature that should have some valid rows.
-            # Distinct raw cell values seen, most common first, are the
-            # fastest way to tell "wrong column" from "marker isn't a plain
-            # ASCII O/x in this file" (e.g. a lookalike Unicode character, a
-            # checkmark, a formula result) from "genuinely all ambiguous".
-            top_values = sorted(raw_value_counts.items(), key=lambda kv: -kv[1])[:10]
+            if excel_io._norm(marker_cell).upper() not in ("", "O", "X"):
+                key = repr(marker_cell)
+                nonstandard_counts[key] = nonstandard_counts.get(key, 0) + 1
+        if nonstandard_counts:
+            top_values = sorted(nonstandard_counts.items(), key=lambda kv: -kv[1])[:10]
             _logger.warning(
-                "%s: 0 row(s) cleanly marked valid for feature %r out of %d row(s) (column index %d, header=%r) - "
-                "most common raw marker cell value(s): %s",
-                sheet, feature_id, len(rows), col_idx, headers[col_idx] if col_idx < len(headers) else None, top_values,
+                "%s: %d row(s) had a non-standard marker cell for feature %r (column index %d, header=%r) - "
+                "treated as not valid; most common non-standard raw value(s): %s",
+                sheet, sum(nonstandard_counts.values()), feature_id, col_idx,
+                headers[col_idx] if col_idx < len(headers) else None, top_values,
+            )
+        if rows and not any(row["_marker"] for row in rows):
+            # Suspicious if this happens on every sheet for a feature that
+            # should have some valid rows - most likely "wrong column
+            # matched" rather than "genuinely zero rows apply".
+            _logger.warning(
+                "%s: 0 row(s) marked valid ('O') for feature %r out of %d row(s) (column index %d, header=%r)",
+                sheet, feature_id, len(rows), col_idx, headers[col_idx] if col_idx < len(headers) else None,
             )
         return rows
 
@@ -531,7 +542,7 @@ class InMemoryWorkbookStore:
     def search_compound_commands(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
         from rapidfuzz import fuzz
 
-        top_k = top_k or self.pipeline_config.compound_command_shortlist_size
+        top_k = top_k or self.pipeline_config.compound_command_max_selected
         scored = []
         for name, cmd in self.compound_commands.items():
             text = name + " " + " ".join(s.keyword_line for s in cmd.steps)
@@ -549,7 +560,7 @@ class InMemoryWorkbookStore:
     def search_library(self, query: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
         from rapidfuzz import fuzz
 
-        top_k = top_k or self.pipeline_config.library_shortlist_size
+        top_k = top_k or self.pipeline_config.library_max_selected
         scored = []
         for entry in self.library_entries:
             text = entry.signature + " " + (entry.description or "")

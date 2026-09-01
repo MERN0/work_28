@@ -1,4 +1,4 @@
-"""Hybrid node: valid App Parameter rows for this feature."""
+"""Deterministic node: valid App Parameter rows for this feature."""
 from __future__ import annotations
 
 from .. import excel_io
@@ -20,11 +20,11 @@ def _s(row: dict, key: str) -> str | None:
     return excel_io._norm(row.get(key)) or None
 
 
-def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, pipeline_config=None):
     def node(state: PipelineState) -> PipelineState:
         feature_id = state["feature_id"]
         with stage_timer(_logger, "app_param_extract", feature_id=feature_id):
-            rows = extract_valid_rows(store, "app_param", feature_id, llm, pipeline_config)
+            rows = extract_valid_rows(store, "app_param", feature_id)
             params = [
                 AppParameter(
                     parameter_id=_s(row, "Parameter ID"),

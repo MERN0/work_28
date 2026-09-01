@@ -88,26 +88,38 @@ class PipelineConfig:
     header_row_match_threshold: int = 75      # locating a sheet's header row among title/banner rows
     column_match_threshold: int = 75          # matching a real column header to a canonical field name
     sheet_name_match_threshold: int = 80      # matching a workbook's sheet name to an expected name
-    # Requirement sheet Category value fast-path. Deliberately much stricter
-    # than the other 75-80 header/column thresholds above: 'Functional
-    # Requirement' vs 'NonFunctional Requirement' (space- or
-    # underscore-separated, e.g. 'Non Functional Requirement') scores ~91.7
-    # on token_sort_ratio - a naive 85 threshold let a non-functional row
-    # silently fast-path as a testable Functional Requirement instead of
-    # escalating to the LLM. 95 sits above that collision while still
-    # fast-pathing genuine typos ('Functional Requirment' etc, 97.7+).
+    # Requirement sheet Category value classification (fully deterministic -
+    # a row that doesn't cross this threshold against the known vocabulary is
+    # dropped, never guessed). Deliberately much stricter than the other
+    # 75-80 header/column thresholds above: 'Functional Requirement' vs
+    # 'NonFunctional Requirement' (space- or underscore-separated, e.g. 'Non
+    # Functional Requirement') scores ~91.7 on token_sort_ratio - a naive 85
+    # threshold let a non-functional row silently fast-path as a testable
+    # Functional Requirement. 95 sits above that collision while still
+    # matching genuine typos ('Functional Requirment' etc, 97.7+).
     category_match_threshold: int = 95
     command_match_threshold: int = 80         # Comm Matrix Signal name -> Command List Command name
     model_input_match_threshold: int = 70     # factor value -> Model_Input_Mapping Test Case Input
     hallucination_match_threshold: int = 92   # the anti-hallucination guardrail (store.exists) - deliberately strict
     general_fuzzy_threshold: int = 90         # default for excel_io.fuzzy_equal/fuzzy_find when no other threshold applies
 
-    # -- Retrieval shortlist sizes --------------------------------------------
-    # Each LLM call gets one shot at this shortlist (no more agentic
-    # re-search with a refined query - see agents.py's module docstring), so
-    # these are generous (raised from 20) to keep a real miss rare.
-    compound_command_shortlist_size: int = 30
-    library_shortlist_size: int = 30
+    # -- Deterministic compound-command / library selection -------------------
+    # compound_command_map.py selects directly from the keyword-overlap
+    # search results (rapidfuzz token_set_ratio of the requirement text
+    # against each candidate's name/steps or signature/description) - no LLM
+    # judgment call, so these two knobs are the only levers on what gets
+    # selected. The *_select_threshold values are deliberately lower than the
+    # name-matching thresholds above (75-95): they score a whole requirement
+    # paragraph's vocabulary against a command's name+steps text, which is a
+    # much looser comparison than matching one short string to another. Start
+    # here and tune against real run logs (`compound_command_map: req=...`
+    # lines) if too many irrelevant commands get selected (raise the
+    # threshold) or too few real ones do (lower it, or raise the *_max_selected
+    # cap).
+    compound_command_max_selected: int = 5
+    library_max_selected: int = 5
+    compound_command_select_threshold: int = 45
+    library_select_threshold: int = 45
     command_lookup_top_k: int = 3
 
     # -- Performance / concurrency --------------------------------------------
