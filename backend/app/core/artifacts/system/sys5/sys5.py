@@ -1,15 +1,14 @@
-"""Entry point for the SYS5 artifact: agentic System Qualification Test Case
-generation from a System Requirements workbook plus supporting reference
-workbooks (Command List, Configuration/Tolerances, Compound Commands,
-Keyword/Library descriptions), for one feature (config["req_sheet_name"]) at
-a time.
+"""Entry point for the SYS5 artifact: extracts every valid Test Pattern for
+every available Functional Requirement of one feature
+(config["req_sheet_name"]) from a System Requirements workbook, and saves the
+result as a single JSON file.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
-import zipfile
 from datetime import datetime
 
 if __package__ in (None, ""):
@@ -27,14 +26,30 @@ from .config import Settings
 from .graph import run_pipeline
 from .logging_utils import configure_logging, get_logger
 from .pipeline_config import PipelineConfig
-from .schema import ProducedManifest
+from .state import PipelineState
+
+
+def _build_payload(state: PipelineState, generated_at: str) -> dict:
+    test_patterns = state.get("test_patterns", {})
+    return {
+        "feature_id": state.get("feature_id", ""),
+        "feature_name": state.get("feature_name", ""),
+        "function_group": state.get("function_group", ""),
+        "generated_at": generated_at,
+        "requirements": [
+            {
+                **req.model_dump(),
+                "test_patterns": [row.model_dump() for row in test_patterns.get(req.req_id, [])],
+            }
+            for req in state.get("requirements", [])
+        ],
+    }
 
 
 def generate(config: dict) -> str:
     settings = Settings.from_config(config)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    settings.timestamp = timestamp  # stashed for _finalise, since the frozen block below doesn't pass it through
-    os.makedirs(settings.output_dir, exist_ok=True)  # required before the frozen block's os.listdir()
+    os.makedirs(settings.output_dir, exist_ok=True)  # required before the log file / JSON output are written
 
     pipeline_config = PipelineConfig.load()
     configure_logging(pipeline_config, output_dir=settings.output_dir)
@@ -46,43 +61,27 @@ def generate(config: dict) -> str:
     started = time.monotonic()
 
     final_state = run_pipeline(settings, pipeline_config)
-    produced: ProducedManifest = final_state["manifest"]
-    produced.started_at = timestamp
-    produced.finished_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger.info("SYS5 generate() pipeline finished in %.1fs, writing zip archive", time.monotonic() - started)
+    payload = _build_payload(final_state, datetime.now().isoformat(timespec="seconds"))
 
-    # ========================== Donot change ==========================
-    zip_path = os.path.join(settings.output_dir, f"SYS5_{settings.project_name}_{timestamp}.zip")
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for filename in os.listdir(settings.output_dir):
-            file_path = os.path.join(settings.output_dir, filename)
-            if os.path.isfile(file_path) and not filename.endswith(".zip"):
-                zf.write(file_path, arcname=filename)
-    return str(_finalise(produced, settings))
+    json_path = os.path.join(settings.output_dir, f"SYS5_TestPatterns_{settings.project_name}_{timestamp}.json")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
 
-
-def _finalise(produced: ProducedManifest, settings: Settings) -> str:
-    """Runs after the zip is already written, so anything written here would
-    not ship inside it - this only summarizes and returns the run's result
-    path. Recomputes the zip path from `settings` rather than needing it
-    passed in, since the frozen block above only receives (produced, settings)."""
-    zip_path = os.path.join(settings.output_dir, f"SYS5_{settings.project_name}_{settings.timestamp}.zip")
+    pattern_count = sum(len(p["test_patterns"]) for p in payload["requirements"])
     summary = (
-        f"SYS5 generation complete for feature {produced.feature_id} ({produced.feature_name}): "
-        f"{produced.requirement_count} requirement(s) -> {produced.test_case_count} test case(s) "
-        f"({produced.flagged_count} flagged for review). Output: {zip_path}"
+        f"SYS5 test-pattern extraction complete for feature {payload['feature_id']} ({payload['feature_name']}): "
+        f"{len(payload['requirements'])} requirement(s) -> {pattern_count} test pattern row(s) "
+        f"in {time.monotonic() - started:.1f}s. Output: {json_path}"
     )
-    get_logger(__name__).info(summary)
+    logger.info(summary)
     print(summary)
-    return zip_path
+    return json_path
 
 
 def main() -> int:
     """Minimal standalone entry point: `python sys5.py <config.json>`. Reads
     the config dict from the given JSON file, runs generate(), and prints the
     resulting artifact path."""
-    import json
-
     if len(sys.argv) < 2:
         print("Usage: python sys5.py <config.json>", file=sys.stderr)
         return 1

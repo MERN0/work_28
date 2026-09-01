@@ -1,10 +1,10 @@
 """Low-level, judgment-free Excel I/O helpers.
 
-Everything here is mechanical: reading real cells honestly, locating header
-rows/columns/sheets under typo/whitespace variance via fuzzy string matching,
-and the deterministic O/x fast-path. None of this decides whether a row is
-*semantically* valid - that's workbook_store.py / the agent nodes. This module
-never invents a value that isn't literally present in a cell.
+Everything here is mechanical: reading real cells honestly, and locating
+header rows/columns/sheets under typo/whitespace variance via fuzzy string
+matching. None of this decides whether a row is *semantically* valid - that's
+workbook_store.py / the node layer. This module never invents a value that
+isn't literally present in a cell.
 """
 from __future__ import annotations
 
@@ -105,28 +105,6 @@ def normalize_feature_id(value: Any) -> Optional[str]:
     return match.group(1).zfill(3)
 
 
-def find_feature_column(headers: list[Any], feature_id: str) -> Optional[int]:
-    """Locate the O/x marker column for `feature_id` among a Comm Matrix /
-    App Parameter / IO Signal sheet's ~83 feature-number columns."""
-    target = normalize_feature_id(feature_id)
-    if target is None:
-        return None
-    for i, h in enumerate(headers):
-        if normalize_feature_id(h) == target:
-            return i
-    return None
-
-
-def is_marked_valid(cell_value: Any) -> bool:
-    """Deterministic O/x validity marker: True only for a clean 'O' (case-
-    insensitive), False for everything else (blank, 'x'/'X', or any other,
-    unexpected cell content). No ambiguous case - a value that isn't a plain
-    O/x is simply not a valid marker; workbook_store.get_feature_marked_rows
-    logs any such non-standard value it sees so a genuinely non-conforming
-    source file is still visible, rather than silently mis-decided."""
-    return _norm(cell_value).upper() == "O"
-
-
 def rows_as_dicts(
     matrix: list[list[Any]], header_row_idx: int, col_map: dict[str, Optional[int]]
 ) -> list[dict[str, Any]]:
@@ -148,59 +126,11 @@ def _fuzzy_key(value: Any) -> str:
     return _norm(value).lower().replace("_", " ")
 
 
-def fuzzy_equal(a: Any, b: Any, threshold: int = 90) -> bool:
-    na, nb = _fuzzy_key(a), _fuzzy_key(b)
-    if not na or not nb:
-        return na == nb
-    if na == nb:
-        return True
-    return fuzz.token_sort_ratio(na, nb) >= threshold
-
-
-def forward_fill_columns(matrix: list[list[Any]], col_indices: list[int]) -> None:
-    """In-place forward-fill blank cells in `col_indices` from the last
-    non-blank value above. Handles columns that are visually merged in Excel
-    (openpyxl's default reader only returns a value on the merge's top-left
-    cell; every other cell in the range reads as None) - e.g. Model Input
-    Mapping's `Signal` column, which spans several `Test Case Input` rows."""
-    last: dict[int, Any] = {idx: None for idx in col_indices}
-    for row in matrix:
-        for idx in col_indices:
-            if idx >= len(row):
-                continue
-            if _norm(row[idx]) == "":
-                row[idx] = last[idx]
-            else:
-                last[idx] = row[idx]
-
-
-def leading_identifier(value: Any) -> str:
-    """Extract the bare leading identifier token from a library-function
-    signature or a generated step's call name - e.g. 'Lib_Ramp' from both
-    'Lib_Ramp Signal_Name(Start=X,Stop=X,Step=X,Time=X)' (no space before the
-    parameter list) and 'Lib_CheckTorqueLimit (Map=MapX,...)' (space before
-    it). Splitting on whitespace *first*, before ever looking for '(', is
-    what makes both stylings resolve to the same bare name. Splitting on '('
-    alone (the earlier approach) kept the literal placeholder parameter name
-    ('Signal_Name') as part of the extracted name for the no-space style,
-    which made every real 'Lib_Ramp' usage fuzzy-score far below any sane
-    threshold against the signature-derived candidate - silently failing the
-    hallucination guardrail for every step that calls a library function."""
-    s = _norm(value)
-    if not s:
-        return ""
-    first_token = s.split()[0]
-    return first_token.split("(")[0].strip()
-
-
 def fuzzy_find(needle: Any, haystack: list[str], threshold: int = 90) -> Optional[str]:
     """Return the entry in `haystack` that best fuzzy-matches `needle`, or None
-    if nothing crosses `threshold`. Used by the hallucination guardrail - the
-    default is deliberately stricter than header/column matching (75-80,
-    tuned separately at each of those call sites) because short domain codes
-    that share a long common prefix (e.g. 'Config_Tol_Spd' vs
-    'Config_Tol_rpm') can otherwise cross a lower threshold and let a
-    hallucinated-but-similar name slip past as a real match."""
+    if nothing crosses `threshold`. Used by requirements_extract's Category
+    classification - a value that doesn't cross the threshold against the
+    known vocabulary is dropped rather than guessed."""
     n = _fuzzy_key(needle)
     if not n:
         return None

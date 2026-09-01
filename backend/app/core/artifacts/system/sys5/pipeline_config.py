@@ -1,8 +1,8 @@
 """One place for every tunable engineering knob in the SYS5 pipeline: LLM
-connection/retry parameters, fuzzy-matching thresholds, retrieval shortlist
-sizes, concurrency, and logging. Everything here has a sensible default (the
-values already in use before this file existed) but can be overridden by
-editing `pipeline_config.json` directly - no code change needed.
+connection/retry parameters, fuzzy-matching thresholds, and logging.
+Everything here has a sensible default (the values already in use before
+this file existed) but can be overridden by editing `pipeline_config.json`
+directly - no code change needed.
 
 Load order (later wins): dataclass defaults -> pipeline_config.json (path
 from `SYS5_PIPELINE_CONFIG_PATH` env var, else the file next to this module)
@@ -29,14 +29,6 @@ class PipelineConfig:
     llm_api_base: str = "http://10.1.2.186:4000"
     llm_temperature: float = 0
     llm_max_retries: int = 3
-    # `ChatOpenAI`'s own HTTP-level retry already retries a slow/failed call
-    # up to llm_max_retries times, each bounded by this timeout - so a call
-    # that *always* times out (not flaky, just genuinely slow) needs a
-    # longer timeout, not more retries. 120s proved too short for
-    # test_pattern_gen against the real gpt-oss-120b proxy (a reasoning
-    # model, first stage to ask for a nontrivial synthesized answer rather
-    # than a classification) - raised to 300s. Override per-run without a
-    # code change via the SYS5_LLM_TIMEOUT env var if 300s still isn't enough.
     llm_timeout_seconds: int = 300
     # Retries for a structured-output call whose answer fails pydantic
     # validation - see agents.py. Separate from llm_max_retries (HTTP-level).
@@ -46,42 +38,25 @@ class PipelineConfig:
     #   schema as a strict `response_format`. A self-hosted backend (vLLM)
     #   compiles it into a grammar for guided decoding - fast for a closed
     #   schema, pathological for one with open-ended `additionalProperties`
-    #   maps (see nodes/test_pattern_gen.py's docstring; every schema in this
-    #   pipeline is deliberately kept closed for this reason).
+    #   maps (see nodes/test_pattern_gen.py's docstring; the schema stays
+    #   closed for this reason).
     # - "function_calling": the older approach - binds one synthetic tool and
     #   forces tool_choice. Switch to this if a particular backend build
     #   handles json_schema poorly.
     structured_output_method: str = "json_schema"
     # gpt-oss (and other reasoning models) can accept an OpenAI
     # `reasoning_effort` param ("low"/"medium"/"high") to trade planning depth
-    # for wall-clock time. Defaults to None (not sent) - tried as "low" for
-    # exactly that wall-clock reason, but a real run against this deployment's
-    # litellm proxy came back with a hard 400: `litellm.UnsupportedParamsError:
-    # openai does not support parameters: ['reasoning_effort'] ... To drop
-    # these, set litellm.drop_params=True`. This proxy/model routing does not
-    # accept the param at all (not a soft ignore), so sending it by default
-    # breaks every stage, not just the reasoning-heavy ones. Only re-enable
-    # (set to "low"/"medium"/"high") once the proxy's own
-    # `litellm_settings.drop_params: true` (or `allowed_openai_params:
-    # ['reasoning_effort']`) is confirmed - a client-side setting can't work
-    # around a server that flatly rejects the parameter.
+    # for wall-clock time. Defaults to None (not sent) - this deployment's
+    # litellm proxy hard-rejects the param (`UnsupportedParamsError`) unless
+    # `litellm_settings.drop_params: true` is set server-side; only re-enable
+    # once that's confirmed.
     llm_reasoning_effort: str | None = None
     # `ChatOpenAI(output_version=...)` - "v0" keeps AIMessage.content a plain
     # string (langchain-openai's pre-1.0 format) instead of the >=1.0 default
     # ("responses/v1"), a list of typed content blocks. The SYS5 endpoint is
     # an internal litellm proxy in front of a self-hosted, non-OpenAI model
-    # (gpt-oss-120b via vLLM), not real OpenAI - it does not reliably round-
-    # trip the newer block format through a multi-turn tool-calling
-    # conversation (confirmed against a real run: litellm rejected a
-    # follow-up request with a "Message content.0 ... ValidatorIterator"
-    # pydantic error once prior turns included tool calls - a known
-    # LangChain/vLLM/gpt-oss compatibility gap, see
-    # https://github.com/langchain-ai/langchain/issues/34751). "v0" is the
-    # official, documented backwards-compatibility value for exactly this -
-    # see llm.py's docstring. See get_llm() for `use_responses_api=False`,
-    # set unconditionally alongside this rather than as a config knob, since
-    # this proxy is Chat-Completions-only and there is never a reason to
-    # let LangChain's auto-detection consider the Responses API for it.
+    # (gpt-oss-120b via vLLM), not real OpenAI - "v0" is the documented
+    # backwards-compatibility value for exactly that. See llm.py's docstring.
     llm_output_version: str = "v0"
 
     # -- Fuzzy-matching thresholds (0-100, higher = stricter) ---------------
@@ -98,56 +73,15 @@ class PipelineConfig:
     # Functional Requirement. 95 sits above that collision while still
     # matching genuine typos ('Functional Requirment' etc, 97.7+).
     category_match_threshold: int = 95
-    command_match_threshold: int = 80         # Comm Matrix Signal name -> Command List Command name
-    model_input_match_threshold: int = 70     # factor value -> Model_Input_Mapping Test Case Input
-    hallucination_match_threshold: int = 92   # the anti-hallucination guardrail (store.exists) - deliberately strict
-    general_fuzzy_threshold: int = 90         # default for excel_io.fuzzy_equal/fuzzy_find when no other threshold applies
 
-    # -- Deterministic compound-command / library selection -------------------
-    # compound_command_map.py selects directly from the keyword-overlap
-    # search results (rapidfuzz token_set_ratio of the requirement text
-    # against each candidate's name/steps or signature/description) - no LLM
-    # judgment call, so these two knobs are the only levers on what gets
-    # selected. The *_select_threshold values are deliberately lower than the
-    # name-matching thresholds above (75-95): they score a whole requirement
-    # paragraph's vocabulary against a command's name+steps text, which is a
-    # much looser comparison than matching one short string to another. Start
-    # here and tune against real run logs (`compound_command_map: req=...`
-    # lines) if too many irrelevant commands get selected (raise the
-    # threshold) or too few real ones do (lower it, or raise the *_max_selected
-    # cap).
-    compound_command_max_selected: int = 5
-    library_max_selected: int = 5
-    compound_command_select_threshold: int = 45
-    library_select_threshold: int = 45
-    command_lookup_top_k: int = 3
-
-    # -- Performance / concurrency --------------------------------------------
-    # User-directed hard cap: at most this many test cases per requirement,
-    # regardless of how large the fixed-factor combinatorial sweep is -
-    # test_pattern_gen.py applies this after expansion (round-robin across
-    # scenarios first, so a cap below the scenario count doesn't starve every
-    # scenario but the first - see its _cap_rows docstring). The single
-    # biggest lever on a requirement's total LLM calls (each row costs at
-    # least one generate + one validate call, more if corrected), so this is
-    # also the most direct fix for "one requirement takes forever" - keep the
-    # factor tables in factors.py scoped to what actually needs coverage
-    # (see its own comments) rather than relying on this cap to hide an
-    # unnecessarily large sweep.
+    # -- Performance --------------------------------------------------------
+    # User-directed hard cap: at most this many test-pattern rows per
+    # requirement, regardless of how large the fixed-factor combinatorial
+    # sweep is - test_pattern_gen.py applies this after expansion
+    # (round-robin across scenarios first, so a cap below the scenario count
+    # doesn't starve every scenario but the first - see its _cap_rows
+    # docstring).
     max_test_cases_per_requirement: int = 5
-    # How many test-pattern rows to generate+validate concurrently in
-    # test_case_loop.py. Each row is an independent unit of work (its own
-    # TestCaseState, its own LLM calls) so this is safe to raise; bounded by
-    # the LLM proxy's real concurrency headroom. 1 = fully sequential.
-    max_concurrent_test_cases: int = 4
-    # Run validate_pass1 and validate_pass2 as ONE combined LLM call (two
-    # rubrics, one round trip) instead of two separate calls. Roughly halves
-    # the validation stage's LLM round trips with no loss of rubric coverage.
-    # Set false to restore the original two-separate-calls behavior.
-    combine_validation_passes: bool = True
-
-    # -- Output ----------------------------------------------------------------
-    test_case_id_prefix: str = "TMHC_SQTC"
 
     # -- Logging -----------------------------------------------------------
     log_level: str = "INFO"

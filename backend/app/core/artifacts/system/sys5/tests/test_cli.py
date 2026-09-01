@@ -5,23 +5,15 @@ import pytest
 from .. import cli
 
 
-def test_build_config_from_individual_file_paths(fixture_paths):
+def test_build_config_from_requirements_path(fixture_paths):
     args = cli._parse_args(
-        [
-            "--requirements", fixture_paths["requirements"],
-            "--command-list", fixture_paths["command_list"],
-            "--configuration", fixture_paths["configuration"],
-            "--compound-commands", fixture_paths["compound_commands"],
-            "--keyword-library", fixture_paths["keyword_library"],
-            "--feature-id", "002",
-            "--output-dir", "/tmp/sys5-cli-test-output",
-        ]
+        ["--requirements", fixture_paths["requirements"], "--feature-id", "002", "--output-dir", "/tmp/sys5-cli-test-output"]
     )
     config = cli.build_config(args)
 
     assert config["req_sheet_name"] == "002"
     assert config["output_dir"] == "/tmp/sys5-cli-test-output"
-    assert set(config["uploaded_files"]) == set(fixture_paths.values())
+    assert config["uploaded_files"] == [fixture_paths["requirements"]]
     assert config["req_filename"] == "System Requirements.xlsx"
 
 

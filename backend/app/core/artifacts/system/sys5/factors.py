@@ -1,16 +1,13 @@
 """Human-supplied, feature-specific factor tables for Test Pattern generation.
 
-These are domain knowledge that cannot be derived from the input workbooks
-(see plan Fix 3/5) - a feature with no entry here fails fast rather than
-letting an LLM invent a plausible-looking factor table. More features will be
-added here over time as the user supplies them; this module is the single
-place that happens.
+These are domain knowledge that cannot be derived from the input workbooks -
+a feature with no entry here fails fast rather than letting an LLM invent a
+plausible-looking factor table. More features will be added here over time as
+the user supplies them; this module is the single place that happens.
 
-`signal_ref` on a Factor is the exact Model_Input_Mapping `Signal` this
-factor sets, when known in advance (a safe, deterministic shortcut for
-model_mapping_resolve). When omitted, model_mapping_resolve falls back to an
-LLM-driven lookup against the feature's valid signal list, subject to the
-same hallucination check as everything else.
+`signal_ref` on a Factor records the exact signal this factor sets, when
+known in advance - reference metadata for whoever consumes this factor table
+downstream; `test_pattern_gen.py` itself only reads `name`/`values`.
 """
 from __future__ import annotations
 

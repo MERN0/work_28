@@ -34,39 +34,19 @@ def test_normalize_feature_id_variants():
     assert excel_io.normalize_feature_id(None) is None
 
 
-def test_find_feature_column():
-    headers = ["Signal ID", "Signal name", "001", "002", "005"]
-    assert excel_io.find_feature_column(headers, "002") == 3
-    assert excel_io.find_feature_column(headers, "2") == 3
-    assert excel_io.find_feature_column(headers, "999") is None
-
-
-def test_is_marked_valid_fast_path():
-    assert excel_io.is_marked_valid("O") is True
-    assert excel_io.is_marked_valid("o") is True
-    assert excel_io.is_marked_valid("x") is False
-    assert excel_io.is_marked_valid("X") is False
-    assert excel_io.is_marked_valid("") is False
-    assert excel_io.is_marked_valid(None) is False
-    assert excel_io.is_marked_valid("?") is False  # anything but a clean 'O' is deterministically not valid
-
-
-def test_forward_fill_columns_handles_merged_cell_reads():
+def test_rows_as_dicts_skips_blank_rows():
     matrix = [
-        [1, "MDL_SWH_DIR_STATE", "FWD"],
-        [None, None, "NEUTRAL"],
-        [None, None, "BWD"],
-        [2, "MDL_SEN_Slope_Angle", "0 deg"],
+        ["Requirement ID", "Category"],
+        ["REQ-1", "Functional Requirement"],
+        [None, None],
+        ["REQ-2", "Heading"],
     ]
-    excel_io.forward_fill_columns(matrix, [0, 1])
-    assert [row[1] for row in matrix] == [
-        "MDL_SWH_DIR_STATE", "MDL_SWH_DIR_STATE", "MDL_SWH_DIR_STATE", "MDL_SEN_Slope_Angle",
-    ]
+    col_map = excel_io.resolve_columns(matrix[0], ["Requirement ID", "Category"])
+    rows = excel_io.rows_as_dicts(matrix, 0, col_map)
+    assert [r["Requirement ID"] for r in rows] == ["REQ-1", "REQ-2"]
 
 
-def test_fuzzy_equal_and_fuzzy_find():
-    assert excel_io.fuzzy_equal("Config_Tol_Spd", "config_tol_spd ") is True
-    assert excel_io.fuzzy_equal("Config_Tol_Spd", "Config_Tol_rpm") is False
-    haystack = ["Config_Tol_Spd", "Config_Tol_Deg", "Config_Tol_rpm"]
-    assert excel_io.fuzzy_find("config tol spd", haystack) == "Config_Tol_Spd"
+def test_fuzzy_find():
+    haystack = ["Functional Requirement", "NonFunctional Requirement", "Heading"]
+    assert excel_io.fuzzy_find("functional requirement", haystack) == "Functional Requirement"
     assert excel_io.fuzzy_find("totally unrelated text", haystack) is None
