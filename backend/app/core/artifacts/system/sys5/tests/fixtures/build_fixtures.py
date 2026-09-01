@@ -55,7 +55,7 @@ def build_system_requirements(out_dir: str) -> str:
         [
             "TMHC_SYSRS_FR002002",
             "The system shall disable slope assist when the option set is disabled.",
-            "Funtional Requiremnt",  # typo'd category - deliberately NOT a clean fuzzy match, to exercise escalation
+            "Funtional Requiremnt",  # typo'd category - deliberately NOT a clean fuzzy match against the known vocabulary
             "Variant 1", "P2", "Testing", "Verify slope assist disables when Option Set is Disabled.",
             "System Testing", "CustReq-2", "Approved", "R1", "", "",
         ]

@@ -1,39 +1,26 @@
-"""Hybrid node: resolve every factor value in this feature's factor table to
-its actual Model_Input_Mapping signal/value, once per feature (shared across
-every requirement's test patterns, rather than re-resolved per test case).
+"""Deterministic node: resolve every factor value in this feature's factor
+table to its actual Model_Input_Mapping signal/value, once per feature
+(shared across every requirement's test patterns, rather than re-resolved
+per test case).
 
-Deterministic exact/fuzzy lookup first (when a factor has a known
-`signal_ref`, or the Test Case Input text fuzzy-matches the factor value
-cleanly); LLM escalation only for factor values that don't resolve cleanly.
+Exact/fuzzy lookup only (a factor's known `signal_ref`, plus a fuzzy match
+of the factor value against that signal's Test Case Input text). A factor
+value that doesn't cross `model_input_match_threshold` against anything in
+the Model_Input_Mapping sheet is left unresolved and logged - not guessed -
+same principle as requirements_extract's category classification.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from .. import excel_io
-from ..agents import call_llm
 from ..factors import get_factor_table
 from ..logging_utils import get_logger, stage_timer
-from ..prompts import get_prompt
-from ..state import PipelineState, valid_signal_names
+from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
 
 _logger = get_logger(__name__)
 
 
-class _ResolvedValue(BaseModel):
-    factor_name: str
-    value: str
-    signal: str
-    model_input: str
-    model_output_to_ecu: str | None = None
-
-
-class _ResolutionBatch(BaseModel):
-    resolutions: list[_ResolvedValue]
-
-
-def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, pipeline_config=None):
     input_threshold = pipeline_config.model_input_match_threshold if pipeline_config else 70
 
     def node(state: PipelineState) -> PipelineState:
@@ -58,32 +45,13 @@ def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
                             continue
                     unresolved.append((factor.name, value))
 
-            _logger.info("model_mapping_resolve: %d resolved via fast-path, %d need LLM escalation", len(resolved), len(unresolved))
-
             if unresolved:
-                listing = "\n".join(f"- Factor {name!r}, value {value!r}" for name, value in unresolved)
-                mapping_listing = "\n".join(
-                    f"- Signal={row.signal!r} Test Case Input={row.test_case_input!r} "
-                    f"Model Input={row.model_input!r} Model Output to ECU={row.model_output_to_ecu!r}"
-                    for row in store.model_input_mapping
-                ) or "(Model_Input_Mapping sheet is empty)"
-                signal_listing = ", ".join(valid_signal_names(state)) or "(none)"
-                prompt = get_prompt("model_mapping_resolve")
-                user_input = (
-                    f"Feature: {state.get('feature_name', state['feature_id'])!r}\n"
-                    f"Resolve the Model_Input_Mapping signal/value for each factor value below, using only "
-                    f"the Model_Input_Mapping rows and valid signals given here.\n\n"
-                    f"Factor values to resolve:\n{listing}\n\n"
-                    f"This feature's valid signals: {signal_listing}\n\n"
-                    f"Full Model_Input_Mapping table:\n{mapping_listing}"
+                _logger.warning(
+                    "model_mapping_resolve: %d factor value(s) could not be resolved deterministically "
+                    "(no Model_Input_Mapping row >= threshold %d) and are left unresolved: %s",
+                    len(unresolved), input_threshold, unresolved,
                 )
-                result = call_llm(llm, prompt, user_input, _ResolutionBatch, pipeline_config=pipeline_config)
-                for r in result.resolutions:
-                    resolved[f"{r.factor_name}::{r.value}"] = {
-                        "signal": r.signal,
-                        "model_input": r.model_input,
-                        "model_output_to_ecu": r.model_output_to_ecu,
-                    }
+            _logger.info("model_mapping_resolve: %d resolved, %d unresolved", len(resolved), len(unresolved))
 
         return {**state, "factor_signal_resolutions": resolved}
 

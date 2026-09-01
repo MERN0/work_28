@@ -48,7 +48,7 @@ def test_is_marked_valid_fast_path():
     assert excel_io.is_marked_valid("X") is False
     assert excel_io.is_marked_valid("") is False
     assert excel_io.is_marked_valid(None) is False
-    assert excel_io.is_marked_valid("?") is None  # ambiguous - must escalate, never silently guessed
+    assert excel_io.is_marked_valid("?") is False  # anything but a clean 'O' is deterministically not valid
 
 
 def test_forward_fill_columns_handles_merged_cell_reads():

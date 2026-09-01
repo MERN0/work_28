@@ -1,6 +1,8 @@
-"""Hybrid node: classify each requirement-sheet row's Category. A clean
-fuzzy match against the known vocabulary is resolved deterministically;
-anything else escalates to an LLM (plan Decision 6).
+"""Deterministic node: classify each requirement-sheet row's Category via a
+fuzzy match against the known vocabulary. Only a row whose Category crosses
+`category_match_threshold` gets classified; anything else (a typo too far
+off, or a genuinely different value) is dropped rather than guessed - same
+treatment a blank Category already got.
 
 Only "Functional Requirement" rows become testable Requirement objects;
 "Heading"/"Information" rows are kept as queryable background context.
@@ -10,12 +12,8 @@ get test cases per the workflow spec.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from .. import excel_io
-from ..agents import call_llm
 from ..logging_utils import get_logger, stage_timer
-from ..prompts import get_prompt
 from ..schema import HeadingInfoRow, Requirement
 from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
@@ -30,15 +28,6 @@ _KNOWN_CATEGORIES = [
     "NonFunctional Requirement",
     "Security Requirement",
 ]
-
-
-class _ClassifiedRow(BaseModel):
-    row_index: int
-    category: str  # must be one of _KNOWN_CATEGORIES
-
-
-class _ClassificationBatch(BaseModel):
-    rows: list[_ClassifiedRow]
 
 
 def _to_requirement(row: dict) -> Requirement:
@@ -59,46 +48,34 @@ def _to_requirement(row: dict) -> Requirement:
     )
 
 
-def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
+def build(store: InMemoryWorkbookStore, pipeline_config=None):
     threshold = pipeline_config.category_match_threshold if pipeline_config else 95
 
     def node(state: PipelineState) -> PipelineState:
         with stage_timer(_logger, "requirements_extract"):
             rows = store.get_requirement_rows()
 
-            clean: list[tuple[dict, str]] = []
-            ambiguous: list[tuple[int, dict]] = []
-            for i, row in enumerate(rows):
+            classified: list[tuple[dict, str]] = []
+            dropped = 0
+            for row in rows:
                 raw_category = row.get("Category")
                 match = excel_io.fuzzy_find(raw_category, _KNOWN_CATEGORIES, threshold=threshold)
                 if match:
-                    clean.append((row, match))
+                    classified.append((row, match))
                 elif excel_io._norm(raw_category):
-                    ambiguous.append((i, row))
+                    dropped += 1
                 # a genuinely blank Category is dropped silently (not a row worth classifying)
 
-            _logger.info("requirement sheet: %d row(s), %d classified via fast-path, %d ambiguous", len(rows), len(clean), len(ambiguous))
-
-            if ambiguous:
-                listing = "\n".join(
-                    f"[{i}] Category={row.get('Category')!r} Requirement Description={row.get('Requirement Description')!r}"
-                    for i, row in ambiguous
+            if dropped:
+                _logger.warning(
+                    "requirements_extract: %d row(s) had a Category value that didn't match any known category "
+                    "(threshold=%d) and were dropped rather than guessed", dropped, threshold,
                 )
-                prompt = get_prompt("requirements_extract")
-                user_input = (
-                    "The following requirement-sheet rows have a Category value that didn't cleanly match "
-                    f"one of: {_KNOWN_CATEGORIES}. Classify each into exactly one of those values.\n\n{listing}"
-                )
-                result = call_llm(llm, prompt, user_input, _ClassificationBatch, pipeline_config=pipeline_config)
-                decided = {c.row_index: c.category for c in result.rows}
-                for i, row in ambiguous:
-                    category = decided.get(i)
-                    if category in _KNOWN_CATEGORIES:
-                        clean.append((row, category))
+            _logger.info("requirement sheet: %d row(s), %d classified, %d dropped", len(rows), len(classified), dropped)
 
             requirements: list[Requirement] = []
             heading_info: list[HeadingInfoRow] = []
-            for row, category in clean:
+            for row, category in classified:
                 if category == "Functional Requirement":
                     requirements.append(_to_requirement(row))
                 elif category in ("Heading", "Information"):

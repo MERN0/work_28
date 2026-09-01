@@ -133,19 +133,26 @@ explicitly rather than relying on any implicit ordering.
 | Stage | File | Deterministic or LLM? |
 |---|---|---|
 | `feature_index` | `nodes/feature_index.py` | Deterministic - exact Index-sheet lookup |
-| `requirements_extract` | `nodes/requirements_extract.py` | Hybrid - fuzzy fast-path, LLM only for ambiguous `Category` values |
-| `comm_matrix_extract` / `app_param_extract` / `io_signal_extract` | `nodes/*_extract.py` + shared `nodes/_marker_extract.py` | Hybrid - fast-path on a clean `O`/`x` marker, LLM only for ambiguous cells |
+| `requirements_extract` | `nodes/requirements_extract.py` | Deterministic - fuzzy match against the known `Category` vocabulary; anything that doesn't cross the threshold is dropped, never guessed |
+| `comm_matrix_extract` / `app_param_extract` / `io_signal_extract` | `nodes/*_extract.py` + shared `nodes/_marker_extract.py` | Deterministic - a row is valid only if its feature-column marker cell is a clean `O` |
 | `test_pattern_gen` | `nodes/test_pattern_gen.py` | LLM plans scenarios; Python does the actual combinatorics (deterministic) |
-| `model_mapping_resolve` | `nodes/model_mapping_resolve.py` | Hybrid - exact/fuzzy lookup first, LLM only for what doesn't resolve |
-| `compound_command_map` | `nodes/compound_command_map.py` | LLM selects, after a deterministic keyword-overlap shortlist narrows ~700 candidates down (see §7) |
+| `model_mapping_resolve` | `nodes/model_mapping_resolve.py` | Deterministic - exact/fuzzy lookup only; a factor value that doesn't cross the threshold is left unresolved, never guessed |
+| `compound_command_map` | `nodes/compound_command_map.py` | Deterministic - keeps the top-scoring keyword-overlap candidates outright (capped + threshold-filtered, see §7) |
 | `test_case_loop` | `nodes/test_case_loop.py` | Orchestrates the inner subgraph (§5) once per test-pattern row, concurrently |
 | `output_assemble` | `nodes/output_assemble.py` | Deterministic - writes the output workbook via `xlsx_writer.py` |
 
-"Hybrid" nodes never let an LLM *invent* an answer for something Python can
-already tell for certain (a literal `O`/`x`, an exact string match) — the LLM
-is only asked when the deterministic check is genuinely ambiguous. This is
-the load-bearing design principle across the whole codebase: **plain Python
-for mechanical fact, an LLM only for actual judgment calls.**
+Every stage that *finds* or *matches* something that already exists in the
+source data - a requirement's category, a valid signal row, a factor's
+Model_Input_Mapping value, a relevant compound command/library call - is
+fully deterministic Python (fuzzy-matching, thresholds, keyword-overlap
+scoring), never an LLM call. An item that doesn't cross its threshold is
+dropped/left unresolved and logged, not guessed by either Python or an LLM.
+The LLM is reserved for the two things in this pipeline that are genuinely
+generative, not lookups: planning test-scenario coverage (`test_pattern_gen`)
+and writing/validating/correcting the test case content itself (§5's inner
+loop). This is the load-bearing design principle across the whole codebase:
+**plain Python for finding what already exists, an LLM only for producing
+new content.**
 
 ## 5. The inner per-test-case subgraph (`graph.py::_build_inner_test_case_graph`)
 
@@ -196,28 +203,35 @@ Xs` on success, or a full exception on failure. Output goes to the console
 timestamped record of exactly what happened and how long each part took —
 check that file first when something looks wrong or slow.
 
-## 7. Where an LLM could pick the wrong thing (know the failure mode)
+## 7. Where the deterministic search could pick the wrong thing (know the failure mode)
 
 `compound_command_map` relies on **lexical** keyword-overlap search
 (`rapidfuzz.fuzz.token_set_ratio` in `workbook_store.py`'s
-`search_compound_commands`/`search_library`) to narrow ~700 compound
-commands / ~50 libraries down to a shortlist (`pipeline_config.
-compound_command_shortlist_size`/`library_shortlist_size`, 30 each) that's
-embedded directly in the one prompt the LLM sees for that requirement. This
-is keyword overlap, not semantic similarity — if a requirement's wording
-shares no vocabulary with the right command's name/steps, that command may
-never make the shortlist, and (since this is a single-shot call — see §9's
-most recent entry) the LLM can't re-search with a different term the way an
-earlier tool-calling version of this stage could. There is currently no
-embedding/semantic fallback; the shortlist size was raised specifically to
-compensate for losing that re-search capability. Everything downstream of a
-*selected* name is still hallucination-checked (§5) — so a wrong-but-real
-command can pass that check; only the fidelity/plausibility validation might
-catch it being the wrong choice for the requirement, and only if it happens
-to notice. If this proves insufficient in practice, the fix is a bigger
-shortlist or a second deterministic Python-side query with different terms -
-not reintroducing agentic tool exploration (see agents.py's module
-docstring for why that was removed).
+`search_compound_commands`/`search_library`) to select the relevant compound
+commands/library calls for a requirement out of ~700 compound commands / ~50
+libraries total: the top-scoring candidates are kept outright, capped at
+`pipeline_config.compound_command_max_selected`/`library_max_selected`
+(5 each by default) and filtered to `compound_command_select_threshold`/
+`library_select_threshold` (45 each by default) — no LLM call, no invented
+name possible, since every selection comes directly from the store's own
+candidate pool. This is keyword overlap, not semantic similarity — if a
+requirement's wording shares no vocabulary with the right command's
+name/steps, that command's score may never cross the selection threshold, so
+it's simply never selected for that requirement (logged at INFO with the
+count selected per requirement — see `compound_command_map: req=...` in
+`sys5_run.log`). There is currently no embedding/semantic fallback.
+Everything downstream of a selected name is still hallucination-checked
+(§5) — irrelevant here, since a deterministic selection can never be a name
+that doesn't exist — but a requirement whose real command was missed
+entirely (score too low) will simply generate its test case without that
+compound command's steps, which `validate`'s fidelity rubric may or may not
+catch. If this proves insufficient in practice, the fix is tuning the
+threshold/cap against real run logs, or a second deterministic query with
+different search terms (e.g. Verification Criteria alone, not just
+Description) — not reintroducing an LLM selection call (see agents.py's
+module docstring for why the tool-calling agent layer this pipeline once
+had was removed, and this file's §9 for why every remaining LLM call in
+this pipeline is single-shot).
 
 Existence checks (does this exact signal/tolerance/command name occur in the
 source data at all) are a different, much safer mechanism: `store.exists()`
@@ -640,3 +654,55 @@ dry run of the pipeline (not just static review)**:
     outside this codebase). `llm_reasoning_effort` defaults to `None` again
     (never sent) until that proxy-side change is confirmed; see the field's
     updated comment in `pipeline_config.py` for the re-enable condition.
+
+11. **User-directed: eliminate every LLM call spent on *finding* something
+    that already exists in the source data, keeping the LLM only for
+    *generating* content.** The four remaining "hybrid" stages
+    (`requirements_extract`, `comm_matrix_extract`/`app_param_extract`/
+    `io_signal_extract` via `_marker_extract`, `model_mapping_resolve`,
+    `compound_command_map`) each escalated their ambiguous/unresolved cases
+    to a real LLM call - correct per the original plan, but real usage
+    showed these added real wall-clock time across dozens of ambiguous
+    rows/requirements per run for what's fundamentally still a matching
+    problem, not a generative one. Rewrote all four to be **fully
+    deterministic**, using the fuzzy-matching/keyword-overlap primitives
+    that were already there:
+    - `requirements_extract`/`model_mapping_resolve`: the same fuzzy-match
+      threshold now decides outright - a row/factor-value that doesn't cross
+      it is dropped/left unresolved and logged (`_logger.warning`), never
+      guessed. No behavior change for anything that *did* cross the
+      threshold before.
+    - `_marker_extract`/`excel_io.is_marked_valid`: collapsed from a
+      three-way `True`/`False`/`None`-escalate result to a plain `bool` -
+      `True` only for a clean `'O'`, `False` for everything else. A
+      non-standard marker cell is now logged by
+      `workbook_store.get_feature_marked_rows` (distinct raw values, most
+      common first) instead of being sent to an LLM for a judgment call.
+    - `compound_command_map`: the keyword-overlap shortlist mechanism from
+      §7 didn't change, but what happens to it did - instead of embedding
+      the shortlist in a prompt and asking an LLM to pick from it, the
+      top-scoring candidates are now kept outright, capped
+      (`compound_command_max_selected`/`library_max_selected`, 5 each) and
+      threshold-filtered (`compound_command_select_threshold`/
+      `library_select_threshold`, 45 each - see §7 for why these are lower
+      than the other fuzzy-match thresholds in this file). Since a
+      selection can now only ever be a name that came directly from the
+      store, the old post-selection `store.exists()` re-check was removed
+      as redundant.
+
+    `test_pattern_gen` (LLM scenario planning) and the inner per-test-case
+    loop (`generate`/`validate`/`correct` - §5) are unchanged: those are
+    genuinely generative, not lookups, so they keep the LLM. Removed
+    alongside this: the `requirements_extract`/`marker_escalate`/
+    `model_mapping_resolve`/`compound_command_map` prompts from
+    `prompts.py`, the `llm`/`pipeline_config` parameters these four nodes'
+    `build()` no longer need (now just `build(store, pipeline_config=None)`
+    - `graph.py`'s node registrations updated to match), and the
+    `compound_command_shortlist_size`/`library_shortlist_size`
+    `pipeline_config` fields (replaced by the four new fields above). See
+    `tests/test_model_mapping_resolve.py` and
+    `tests/test_compound_command_map.py` (new - these stages had no direct
+    unit coverage before, since they were LLM-backed) for the deterministic
+    selection/resolution logic, and `tests/test_requirements_extract.py`/
+    `tests/test_excel_io.py`/`tests/test_workbook_store.py` for the updated
+    fast-path-only behavior of the other three.

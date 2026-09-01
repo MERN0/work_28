@@ -35,13 +35,13 @@ def test_requirement_rows_include_heading_and_typo_category(fixture_paths, featu
     assert "Funtional Requiremnt" in categories  # not silently normalized here - node layer decides
 
 
-def test_comm_matrix_marker_fast_path_and_escalation(fixture_paths, feature_id):
+def test_comm_matrix_marker_fast_path_is_fully_deterministic(fixture_paths, feature_id):
     store = _load(fixture_paths, feature_id)
     rows = store.get_feature_marked_rows("comm_matrix", feature_id)
     markers = {r["Signal name"]: r["_marker"] for r in rows}
     assert markers["Main_TxS_0x2020_0x01"] is True    # clean 'O'
     assert markers["Main_TxS_0x2040_0x05"] is False   # clean 'x'
-    assert markers["Disp_Rx1_Warning"] is None        # '?' - must escalate, not silently decided
+    assert markers["Disp_Rx1_Warning"] is False        # '?' - not a clean 'O', so deterministically not valid
 
 
 def test_command_name_lookup(fixture_paths, feature_id):

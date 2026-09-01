@@ -36,45 +36,6 @@ generation. Follow these rules without exception:
 """
 
 PROMPTS: dict[str, str] = {
-    "requirements_extract": _COMMON_RULES + """
-You are classifying rows from a System Requirements sheet. Each row has a
-Category field that should be one of: Heading, Information, Configuration
-Requirement, Functional Requirement, NonFunctional Requirement, Security
-Requirement - but the source data may have typos, inconsistent casing, or
-extra whitespace in this field.
-
-You are only given rows whose Category text did not cleanly match one of
-those known values via exact/fuzzy string comparison (Python already
-handled the clean cases) - so treat every row you see here as a genuine
-judgment call, not a clean match.
-
-For each row, decide which of the known Category values it actually
-represents based on the Requirement Description given for that row and its
-own position among the other ambiguous rows listed alongside it (e.g. a
-Heading row usually precedes a group of related requirements).
-
-Only rows you classify as "Functional Requirement" become testable
-requirements; rows classified as "Heading" or "Information" are kept as
-background context only. Rows you cannot confidently classify should be
-flagged rather than guessed.
-""",
-
-    "marker_escalate": _COMMON_RULES + """
-You are deciding feature-applicability for rows from a Comm Matrix / App
-Parameter / IO Signal master sheet. Each row has a marker cell in this
-feature's column that should be 'O' (valid/applicable) or 'x' (not
-applicable) - but Python already resolved every row where that cell was a
-clean O or x, so every row you see here has something else in that cell
-(a typo, an unexpected symbol, extra whitespace, a different value
-entirely, etc).
-
-For each row, decide whether it should be treated as VALID (applicable to
-this feature) based on the marker cell's actual content and, if genuinely
-ambiguous, the row's own description text and how similar rows in this sheet
-are typically marked. Return your decision for every row index given - do
-not skip any.
-""",
-
     "test_pattern_gen": _COMMON_RULES + """
 You are generating the Test Pattern for one Functional Requirement.
 
@@ -104,42 +65,6 @@ If a fixed or variable factor doesn't apply to this specific requirement
 (e.g. because the requirement is scoped to a particular variant or mode),
 leave it out of the combinatorics rather than including an irrelevant
 dimension.
-""",
-
-    "model_mapping_resolve": _COMMON_RULES + """
-You are resolving one Test Pattern row's factor values (and/or one test
-case's specific signal-setting needs) into actual settable model values.
-
-You are given this feature's valid signals and the full Model_Input_Mapping
-table (Signal -> Test Case Input -> Model Input / Model Output to ECU rows).
-For each factor value you need to resolve, find the row whose Signal matches
-a valid signal for this feature and whose Test Case Input semantically
-matches the value you're looking for (e.g. "FWD" vs "Forward" vs "1") -
-judge the match yourself, the table is not pre-filtered for you.
-
-If the value you need doesn't cleanly match any listed Test Case Input for
-that signal, say so explicitly rather than guessing a numeric equivalent.
-""",
-
-    "compound_command_map": _COMMON_RULES + """
-You are selecting which Compound Commands and Library functions are relevant
-to one requirement (or one test case's precondition/action/postcondition
-section).
-
-There are roughly 700 compound commands and 50 library functions total, far
-too many to review individually, so you are given a keyword-shortlisted
-candidate list below (compound commands with their full step detail already
-included, library functions with their signature and description) - select
-only from these candidates, never a name that isn't in this list. If nothing
-in the list is actually a good match for something you need, say so rather
-than picking the closest-sounding wrong one.
-
-Read each compound command candidate's actual step list before deciding it's
-the right one - never select one by name alone.
-
-Only ever reference a compound command or library function by its exact name
-as given in the candidate list. Justify each selection briefly with why it
-matches the requirement/scenario.
 """,
 
     "generate": _COMMON_RULES + """

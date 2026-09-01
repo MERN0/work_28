@@ -30,8 +30,6 @@ class _FakeStore:
 
 
 def test_app_param_extract_handles_numeric_cells():
-    # Every row has a clean marker=True (the O fast-path), so extract_valid_rows
-    # never escalates to the LLM - no stub needed for call_llm.
     rows = [
         {
             "Parameter ID": "TMHC_SYSRS_PARM0001",
@@ -47,7 +45,7 @@ def test_app_param_extract_handles_numeric_cells():
             "_marker": True, "_marker_raw": "O",
         }
     ]
-    node = app_param_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
+    node = app_param_extract.build(_FakeStore(rows), pipeline_config=PipelineConfig())
 
     state = node({"feature_id": "019"})
 
@@ -71,7 +69,7 @@ def test_comm_matrix_extract_handles_numeric_cells():
             "_marker": True, "_marker_raw": "O",
         }
     ]
-    node = comm_matrix_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
+    node = comm_matrix_extract.build(_FakeStore(rows), pipeline_config=PipelineConfig())
 
     state = node({"feature_id": "019"})
 
@@ -93,7 +91,7 @@ def test_io_signal_extract_handles_numeric_cells():
             "_marker": True, "_marker_raw": "O",
         }
     ]
-    node = io_signal_extract.build(_FakeStore(rows), llm=None, pipeline_config=PipelineConfig())
+    node = io_signal_extract.build(_FakeStore(rows), pipeline_config=PipelineConfig())
 
     state = node({"feature_id": "019"})
 
