@@ -25,9 +25,9 @@ def test_expand_combines_only_applicable_fixed_factors():
         ]
     )
     rows = _expand(plan, table)
-    # Truck Size(2) x Power Control Mode(3) x Direction Switch(2) x Load Capacity(2) = 24
-    assert len(rows) == 24
-    assert {r.test_case_no for r in rows} == set(range(1, 25))
+    # Truck Size(2) x Power Control Mode(3) x Direction Switch(2) x Load Capacity(1, NL only - FL excluded per scope) = 12
+    assert len(rows) == 12
+    assert {r.test_case_no for r in rows} == set(range(1, 13))
     assert all(r.variable_transitions["Slope angle"] == "0 deg -> 3 deg" for r in rows)
     assert all("Discharge Capacity" not in r.fixed_values for r in rows)  # not marked applicable, so excluded
 
@@ -60,6 +60,6 @@ def test_expand_concatenates_multiple_scenarios_with_running_counter():
         ]
     )
     rows = _expand(plan, table)
-    assert len(rows) == 4  # 2 + 2
-    assert [r.test_case_no for r in rows] == [1, 2, 3, 4]
-    assert [r.scenario_id for r in rows] == ["s1", "s1", "s2", "s2"]
+    assert len(rows) == 3  # 2 (Direction Switch) + 1 (Load Capacity, NL only)
+    assert [r.test_case_no for r in rows] == [1, 2, 3]
+    assert [r.scenario_id for r in rows] == ["s1", "s1", "s2"]

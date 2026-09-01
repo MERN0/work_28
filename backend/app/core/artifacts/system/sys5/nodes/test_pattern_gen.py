@@ -94,7 +94,31 @@ def _expand(plan: _PatternPlan, table: FactorTable) -> list[TestPatternRow]:
     return rows
 
 
+def _cap_rows(rows: list[TestPatternRow], max_rows: int) -> list[TestPatternRow]:
+    """Cap the total rows for one requirement (user-directed: at most
+    `pipeline_config.max_test_cases_per_requirement` test cases per
+    requirement, both for wall-clock cost and to keep the output focused).
+    Round-robins across scenarios first, so a cap below the scenario count
+    never silently drops every row of every scenario but the first, then
+    renumbers test_case_no sequentially so the kept rows are still 1..N with
+    no gaps."""
+    if max_rows <= 0 or len(rows) <= max_rows:
+        return rows
+    by_scenario: dict[str, list[TestPatternRow]] = {}
+    for row in rows:
+        by_scenario.setdefault(row.scenario_id, []).append(row)
+    capped: list[TestPatternRow] = []
+    while len(capped) < max_rows and any(by_scenario.values()):
+        for bucket in by_scenario.values():
+            if len(capped) >= max_rows:
+                break
+            if bucket:
+                capped.append(bucket.pop(0))
+    return [row.model_copy(update={"test_case_no": i}) for i, row in enumerate(capped, start=1)]
+
+
 def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
+    max_rows = pipeline_config.max_test_cases_per_requirement if pipeline_config else 5
     def node(state: PipelineState) -> PipelineState:
         table = get_factor_table(state["feature_id"])
         patterns: dict[str, list[TestPatternRow]] = {}
@@ -117,7 +141,14 @@ def build(store: InMemoryWorkbookStore, llm, pipeline_config=None):
                        if heading_context else "")
                 )
                 result = call_llm(llm, prompt, user_input, _PatternPlan, pipeline_config=pipeline_config)
-                patterns[req.req_id] = _expand(result, table)
+                expanded = _expand(result, table)
+                patterns[req.req_id] = _cap_rows(expanded, max_rows)
+                if len(patterns[req.req_id]) < len(expanded):
+                    _logger.info(
+                        "test_pattern_gen: req=%s -> %d combinatorial row(s), capped to %d "
+                        "(pipeline_config.max_test_cases_per_requirement)",
+                        req.req_id, len(expanded), len(patterns[req.req_id]),
+                    )
                 _logger.info("test_pattern_gen: req=%s -> %d test-pattern row(s)", req.req_id, len(patterns[req.req_id]))
 
         return {**state, "test_patterns": patterns}

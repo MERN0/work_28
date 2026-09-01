@@ -513,3 +513,88 @@ dry run of the pipeline (not just static review)**:
    `tests/test_context_builder.py` for a direct regression test (asserts a
    signal with `command_name=None` - the exact below-threshold case - still
    surfaces its real candidates).
+
+7. **A second, distinct cause of the same symptom** (found from a real run's
+   log showing failures explicitly logged as `ref_kind="signal"` for real
+   `CAN_Main_*` names - a name that exists, rejected anyway):
+   `TestStep.ref_kind` was a field the LLM filled in independently of
+   `TestStep.keyword`, so the two could disagree - a step correctly keyworded
+   `SDO_Set` could still carry `ref_kind="signal"`, sending
+   `hallucination_check` to check a real Command List name against the
+   *signal* candidate pool (Comm Matrix/IO Signal/Model Input Mapping names),
+   which it was never going to find. There is no legitimate case where the
+   same keyword needs two different ref_kinds, so this was never something
+   worth asking the model - fixed by deriving it deterministically instead:
+   `schema.derive_ref_kind(keyword)` (a plain dict lookup) is now applied to
+   every step in `generate.py` and `correct.py` immediately after the LLM
+   call, **overwriting** whatever `ref_kind` the model produced. The model
+   still emits a `ref_kind` field (required by the closed structured-output
+   schema - see finding 5 above on why every schema here stays closed) but
+   it is unconditionally discarded.
+
+   As defense in depth for the *other* direction of the same confusion (the
+   model picks a real name but the "wrong" keyword for it - e.g. `Set`
+   instead of `SDO_Set` for a genuinely CAN-sourced signal, a plausibility
+   mistake `validate_pass2` is better suited to catch than the existence
+   guardrail), `store.exists()` now checks `ref_kind="signal"` against the
+   Command List too, and `ref_kind="command"` against the signal pool too,
+   before failing either. A name that's real under the "other side" of the
+   distinction still passes; a genuinely invented name still fails both.
+
+   Separately, `workbook_store.get_feature_marked_rows()` now logs (at
+   WARNING) whenever a sheet resolves zero rows to a clean `O` for a feature
+   - the resolved column index/header plus the most common raw marker cell
+   values actually seen, e.g. distinguishing "wrong column matched" from "the
+   real file doesn't use a plain ASCII O" (a lookalike Unicode character, a
+   checkmark, a formula result) from "genuinely every row is ambiguous for
+   this feature". Not a fix by itself - a diagnostic for whichever of those
+   turns out to be true, added because a real run showed 0 valid via the
+   fast-path on every master sheet simultaneously, which is itself worth
+   confirming rather than assuming.
+
+   See `tests/test_ref_kind_normalization.py` and
+   `tests/test_workbook_store.py::test_hallucination_guardrail_exists_falls_back_across_signal_and_command`.
+
+8. **User-directed scope/performance tightening**, requested together after
+   the hallucination fixes above: generated test cases were taking too long
+   ("infinitely long... even for 1 req") and were paraphrasing exact
+   short-form values instead of copying them.
+
+   - **`max_test_cases_per_requirement` cap (default 5).** The combinatorial
+     sweep in `test_pattern_gen.py` (`_expand`) can legitimately produce more
+     rows than are worth the wall-clock cost - each row costs at least one
+     `generate` + one `validate` LLM call, more on a correction. New
+     `_cap_rows()` enforces the cap *after* expansion, round-robining across
+     scenarios first (so a cap smaller than the scenario count still keeps at
+     least one row per scenario instead of only ever keeping the first
+     scenario's rows) and renumbering `test_case_no` sequentially afterward
+     so kept rows stay a gapless `1..N`. Logged at INFO whenever it actually
+     truncates.
+   - **`llm_reasoning_effort` default changed from `None` to `"low"`.** Every
+     stage in this pipeline only ever asks for a small, already-scoped answer
+     (never open-ended reasoning), so a reasoning model's higher-effort
+     analysis budget was pure wall-clock cost with no answer-quality benefit
+     here - see the field's comment in `pipeline_config.py`.
+   - **Slope Assist's `Load Capacity` factor trimmed to `["NL"]`** (was
+     `["NL", "FL"]`) in `factors.py` - user-directed: only No Load needs
+     sweeping for this feature; Full Load was roughly doubling its row count
+     for no requested benefit. `Power Control Mode` (`["P", "S", "E"]`) is
+     unchanged - all power modes still need coverage.
+   - **Exact-value + units prompt strengthening.** Generated steps were
+     paraphrasing factor values instead of copying them verbatim (e.g.
+     writing "Forward" for `FWD`, "Power mode" for `P`, "No Load" for `NL`) -
+     wrong, since these short forms are the actual values the test rig
+     expects. Added an explicit paragraph to the `generate` prompt requiring
+     verbatim copying from the fixed/variable factor context and from
+     resolved factor signal mappings, plus a requirement to fill in a step's
+     Units (and a Verify's Units2) from the matching tolerance whenever one
+     exists, rather than leaving it blank. Mirrored both requirements as new
+     Rubric 2 checklist bullets in both `validate_pass2` and
+     `validate_combined`, so a paraphrased value or a missing unit now fails
+     validation and triggers the one-shot correction pass instead of
+     reaching the output workbook silently.
+
+   Verified via the full test suite (68 passed) and a fresh dry-run: the
+   fixture requirement's 12-row combinatorial expansion
+   (`Truck Size(2) x Power Control Mode(3) x Direction Switch(2) x Load
+   Capacity(1)`) now caps to 5 test cases as configured, 0 flagged.

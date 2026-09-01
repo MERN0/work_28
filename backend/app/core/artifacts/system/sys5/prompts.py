@@ -189,6 +189,19 @@ whatever it does internally. Never separately re-emit its internal
 signals/steps as your own Set/Verify/SDO_Set/SDO_Verify steps; reference it
 by name only.
 
+Parameter Settings/Expected Value for a fixed- or variable-factor value MUST
+be copied verbatim from "Fixed factor values"/"Variable factor transitions"/
+"Resolved factor signal mappings" given to you - never spell out, paraphrase,
+translate, or expand a value. Copy the exact short form you were given, e.g.
+"FWD" (not "Forward"), "P" (not "Power mode" or "Power"), "NL" (not "No
+Load") - these are already the real values the test rig expects, verbatim is
+correct and a full-word expansion is wrong even if it looks more readable.
+Whenever a step sets or verifies a real-world measured quantity that has a
+matching entry in the tolerances given to you (speed, rpm, voltage, tilt,
+slope angle, load, etc.), fill in that step's Units (and Units2 for Verify's
+Expected Value, where applicable) from that tolerance's unit - never leave
+Units blank for a step that has one.
+
 Structure the steps into three phases, in this order:
   PRECONDITION - establish the starting state (power on, key on, default
                   tuning/config, and setting every fixed-factor value for
@@ -284,6 +297,11 @@ Check:
   the source data implies settling time is needed.
 - Every tolerance-bearing Verify/SDO_Verify is preceded by the matching
   Config_Tol_* step.
+- Every Parameter Settings/Expected Value for a fixed- or variable-factor
+  value is the exact short form given (e.g. "FWD"/"P"/"NL"), never a
+  spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
+- Every step whose value has a matching tolerance has its Units (and Units2
+  for a Verify's Expected Value) filled in from that tolerance, never blank.
 - The step vocabulary is used correctly (Set vs SDO_Set, Verify vs
   SDO_Verify, correct use of Compound/Lib_/FIU syntax).
 - The test case starts with Test_start and ends with End_of_test, with
@@ -334,6 +352,11 @@ physically sensible vehicle test?
   source data implies settling time is needed.
 - Every tolerance-bearing Verify/SDO_Verify is preceded by the matching
   Config_Tol_* step.
+- Every Parameter Settings/Expected Value for a fixed- or variable-factor
+  value is the exact short form given (e.g. "FWD"/"P"/"NL"), never a
+  spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
+- Every step whose value has a matching tolerance has its Units (and Units2
+  for a Verify's Expected Value) filled in from that tolerance, never blank.
 - The step vocabulary is used correctly (Set vs SDO_Set, Verify vs
   SDO_Verify, correct use of Compound/Lib_/FIU syntax).
 - The test case starts with Test_start and ends with End_of_test, with step

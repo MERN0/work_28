@@ -39,7 +39,10 @@ def _slope_assist_fixed_factors() -> list[Factor]:
             ease_of_adjustment="Easy",
             signal_ref="MDL_SWH_DIR_STATE",
         ),
-        Factor(name="Load Capacity", values=["NL", "FL"], ease_of_adjustment="Easy", signal_ref="MDL_SEN_Load"),
+        # User-directed scope reduction: only No Load needs to be swept for
+        # Slope Assist - Full Load doesn't add test value here and was
+        # roughly doubling this feature's row count for no benefit.
+        Factor(name="Load Capacity", values=["NL"], ease_of_adjustment="Easy", signal_ref="MDL_SEN_Load"),
     ]
 
 

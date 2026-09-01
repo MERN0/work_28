@@ -53,12 +53,15 @@ class PipelineConfig:
     #   handles json_schema poorly.
     structured_output_method: str = "json_schema"
     # gpt-oss (and other reasoning models) accept an OpenAI `reasoning_effort`
-    # ("low"/"medium"/"high"). Left None by default = don't send it, so the
-    # model's own default applies and nothing changes silently. Set "low" if
-    # you want to trade some planning depth for a large wall-clock win - a
-    # reasoning model can spend far longer on analysis tokens than on the
-    # (small) answer these stages actually ask for.
-    llm_reasoning_effort: str | None = None
+    # ("low"/"medium"/"high"). Defaults to "low": every stage in this
+    # pipeline only ever asks for a small, already-scoped answer (a short
+    # plan, a handful of steps), never open-ended reasoning, so spending
+    # "medium"/"high" analysis-token budget on it is wall-clock cost with no
+    # real benefit - and wall-clock time (a full run reportedly taking
+    # "infinitely long") is the priority here. Set to None to stop sending it
+    # (the model's own default applies) if answer quality ever regresses
+    # enough to be worth the trade back.
+    llm_reasoning_effort: str | None = "low"
     # `ChatOpenAI(output_version=...)` - "v0" keeps AIMessage.content a plain
     # string (langchain-openai's pre-1.0 format) instead of the >=1.0 default
     # ("responses/v1"), a list of typed content blocks. The SYS5 endpoint is
@@ -104,6 +107,18 @@ class PipelineConfig:
     command_lookup_top_k: int = 3
 
     # -- Performance / concurrency --------------------------------------------
+    # User-directed hard cap: at most this many test cases per requirement,
+    # regardless of how large the fixed-factor combinatorial sweep is -
+    # test_pattern_gen.py applies this after expansion (round-robin across
+    # scenarios first, so a cap below the scenario count doesn't starve every
+    # scenario but the first - see its _cap_rows docstring). The single
+    # biggest lever on a requirement's total LLM calls (each row costs at
+    # least one generate + one validate call, more if corrected), so this is
+    # also the most direct fix for "one requirement takes forever" - keep the
+    # factor tables in factors.py scoped to what actually needs coverage
+    # (see its own comments) rather than relying on this cap to hide an
+    # unnecessarily large sweep.
+    max_test_cases_per_requirement: int = 5
     # How many test-pattern rows to generate+validate concurrently in
     # test_case_loop.py. Each row is an independent unit of work (its own
     # TestCaseState, its own LLM calls) so this is safe to raise; bounded by
