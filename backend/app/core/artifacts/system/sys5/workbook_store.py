@@ -572,11 +572,33 @@ class InMemoryWorkbookStore:
     def exists(self, ref_kind: str, target_ref: Optional[str], fuzzy_threshold: Optional[int] = None) -> bool:
         """Hallucination guardrail: does `target_ref` literally exist (fuzzy
         matched) in the parsed source data for the given `ref_kind`?"""
-        fuzzy_threshold = fuzzy_threshold or self.pipeline_config.hallucination_match_threshold
         if ref_kind == "none":
             return True
-        if not target_ref:
-            return False
+        return self.resolve_ref(ref_kind, target_ref, fuzzy_threshold) is not None
+
+    def resolve_ref(self, ref_kind: str, target_ref: Optional[str], fuzzy_threshold: Optional[int] = None) -> Optional[str]:
+        """Fuzzy-resolve `target_ref` to its exact, canonical spelling in the
+        parsed source data for `ref_kind`, or None if nothing crosses
+        `fuzzy_threshold` (same matching `exists()` is defined in terms of,
+        so a name that passes the guardrail always resolves here too).
+
+        This is what `generate.py`/`correct.py` call right after generation
+        to REPLACE the LLM's own target_ref with the real name - not just
+        confirm one exists. A real bug this closes: `fuzzy_find`'s matching
+        deliberately treats '_' and ' ' as equivalent (see excel_io._fuzzy_key
+        - so typos/casing/separator-style differences don't spuriously fail
+        the guardrail), which means a step referencing e.g. 'CAN HIL HMode'
+        (spaces) used to pass `exists()` against the real 'CAN_HIL_HMode'
+        (underscores) - a real signal, correctly recognized as not
+        hallucinated - but the malformed spelling itself, exactly as the LLM
+        wrote it, still shipped in the output workbook unchanged, since
+        nothing ever wrote the canonical form back. `exists()` alone can
+        never tell a caller "yes, but here's the real spelling" - only
+        `resolve_ref()` can, which is why it exists as a separate method
+        rather than making `exists()` itself return the match."""
+        fuzzy_threshold = fuzzy_threshold or self.pipeline_config.hallucination_match_threshold
+        if ref_kind == "none" or not target_ref:
+            return None
         if ref_kind == "signal":
             candidates = [m.signal for m in self.model_input_mapping]
             candidates += [row.get("Signal name") or row.get("Signal Name") or "" for row in self._all_signal_rows()]
@@ -602,9 +624,9 @@ class InMemoryWorkbookStore:
         elif ref_kind == "parameter":
             candidates = [row.get("Parameter Name") or "" for row in self._all_param_rows()]
         else:
-            return False
+            return None
         candidates = [c for c in candidates if c]
-        return excel_io.fuzzy_find(target_ref, candidates, threshold=fuzzy_threshold) is not None
+        return excel_io.fuzzy_find(target_ref, candidates, threshold=fuzzy_threshold)
 
     def _all_signal_rows(self) -> list[dict[str, Any]]:
         col_map = self._resolve_columns(self.comm_matrix_headers, ["Signal ID", "Signal name", "Logical Signal Name"])

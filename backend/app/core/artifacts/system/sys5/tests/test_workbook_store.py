@@ -123,3 +123,20 @@ def test_hallucination_guardrail_exists_falls_back_across_signal_and_command(fix
     assert store.exists("command", "Main_TxS_0x2020_0x01") is True  # a real signal name, checked as ref_kind=command
     assert store.exists("signal", "CAN_Totally_Invented_Name") is False
     assert store.exists("command", "Totally_Invented_Signal_Name") is False
+
+
+def test_resolve_ref_returns_the_canonical_spelling_not_just_a_yes_no(fixture_paths, feature_id):
+    """Regression test for a real production bug: fuzzy_find deliberately
+    treats '_' and ' ' as equivalent (excel_io._fuzzy_key), so a step
+    referencing e.g. 'CAN HIL PwrCtrlMode' (spaces) correctly passes
+    exists() against the real 'CAN_HIL_PwrCtrlMode' (underscores) - but
+    exists() only ever returned True/False, so the malformed spelling itself
+    used to ship unchanged into the output workbook. resolve_ref() is what
+    generate.py/correct.py now use instead, to get the real spelling back."""
+    store = _load(fixture_paths, feature_id)
+    assert store.resolve_ref("command", "CAN HIL PwrCtrlMode") == "CAN_HIL_PwrCtrlMode"
+    assert store.resolve_ref("signal", "main txs 0x2020 0x01") == "Main_TxS_0x2020_0x01"
+    assert store.resolve_ref("compound_command", "power on a1") == "Power_On_A1"
+    assert store.resolve_ref("compound_command", "Totally_Made_Up_Command") is None
+    assert store.resolve_ref("none", "anything") is None
+    assert store.resolve_ref("signal", None) is None

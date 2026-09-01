@@ -130,7 +130,12 @@ Whenever a step sets or verifies a real-world measured quantity that has a
 matching entry in the tolerances given to you (speed, rpm, voltage, tilt,
 slope angle, load, etc.), fill in that step's Units (and Units2 for Verify's
 Expected Value, where applicable) from that tolerance's unit - never leave
-Units blank for a step that has one.
+Units blank for a step that has one. The Units/Units2 FIELD is where a unit
+belongs, always - never describe or mention a tolerance's value or unit only
+in Remarks while leaving Units/Units2 blank; that is not an acceptable
+substitute and will be treated as a missing-Units error, not a documented
+one. Remarks explains WHY the step exists; Units/Units2 is the only place a
+unit is recorded.
 
 Structure the steps into three phases, in this order:
   PRECONDITION - establish the starting state (power on, key on, default
@@ -232,6 +237,9 @@ Check:
   spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
 - Every step whose value has a matching tolerance has its Units (and Units2
   for a Verify's Expected Value) filled in from that tolerance, never blank.
+  A Remarks entry that mentions a tolerance's value/unit while Units/Units2
+  is left blank is this same violation, not a documented exception - the
+  unit belongs in the Units/Units2 field itself.
 - The step vocabulary is used correctly (no deprecated SDO_Set/SDO_Verify -
   every signal, model-input or CAN/SDO-sourced, uses plain Set/Verify;
   correct use of Compound/Lib_/FIU syntax).
@@ -288,6 +296,9 @@ physically sensible vehicle test?
   spelled-out or paraphrased expansion ("Forward"/"Power mode"/"No Load").
 - Every step whose value has a matching tolerance has its Units (and Units2
   for a Verify's Expected Value) filled in from that tolerance, never blank.
+  A Remarks entry that mentions a tolerance's value/unit while Units/Units2
+  is left blank is this same violation, not a documented exception - the
+  unit belongs in the Units/Units2 field itself.
 - The step vocabulary is used correctly (no deprecated SDO_Set/SDO_Verify -
   every signal, model-input or CAN/SDO-sourced, uses plain Set/Verify;
   correct use of Compound/Lib_/FIU syntax).

@@ -747,3 +747,58 @@ dry run of the pipeline (not just static review)**:
     `pipeline_config.json` knob - but it now defaults to fully sequential
     (one test-pattern row at a time) until that backend-under-load behavior
     is understood well enough to trust a higher value again.
+
+13. **User-reported: "signals not properly used", asked whether there's a
+    growing conversation/context behind it.** Checked directly: there isn't.
+    `agents.py::call_llm()` builds exactly `[SystemMessage, HumanMessage]`
+    fresh on every call (see its own docstring - this is deliberate, not an
+    oversight: the whole single-shot architecture exists specifically to
+    avoid a growing multi-turn conversation, see agents.py's module
+    docstring), `llm.py::get_llm()`'s `ChatOpenAI` client holds no
+    conversation state between calls, and each test-pattern row gets a
+    fully fresh `TestCaseState` (`test_case_loop.py::_run_one`) - so no
+    later row's prompt is any bigger than the first's, and nothing carries
+    over between rows. "Degrades after the first" was a coincidence of
+    which row happened to trigger the actual bug, not a growing-context
+    effect - confirmed by finding a real, reproducible cause below that has
+    nothing to do with call order.
+
+    **Real bug found**: `excel_io.fuzzy_find`'s matching deliberately treats
+    `'_'` and `' '` as equivalent (`_fuzzy_key`, so typos/casing/separator-
+    style differences don't spuriously fail the hallucination guardrail) -
+    which means a step referencing e.g. `'CAN HIL HMode'` (spaces) correctly
+    passed `store.exists()` against the real `'CAN_HIL_HMode'` (underscores)
+    - genuinely not a hallucination - but `exists()` only ever returned a
+    bool, so the malformed spelling itself, exactly as the LLM wrote it,
+    still shipped into the output workbook unchanged. Fixed with
+    `InMemoryWorkbookStore.resolve_ref()` (`exists()` is now defined in
+    terms of it: `resolve_ref(...) is not None`), which returns the
+    canonical matched string instead of just a bool. New shared
+    `nodes/_step_normalize.py::normalize_steps()` (used by both
+    `generate.py` and `correct.py`, replacing the ref_kind/step_text-only
+    normalization from findings 7/12 above) now replaces every step's
+    `target_ref` with its resolved canonical spelling right after the LLM
+    call - and since `step_text` is derived from `target_ref` (finding 12),
+    doing this before deriving `step_text` fixes both in one pass, in the
+    right order. See `tests/test_step_normalize.py` and
+    `tests/test_workbook_store.py::test_resolve_ref_returns_the_canonical_spelling_not_just_a_yes_no`.
+
+    **Also user-reported: tolerance values/units showing up only in Remarks,
+    with Units/Units2 left blank.** No code bug found here - `TestStep.units`/
+    `units2` are real fields, correctly written to the output workbook by
+    `xlsx_writer.py` whenever populated, and both `generate`/`validate_pass2`/
+    `validate_combined` prompts already had a rule requiring them to be
+    filled from the matching tolerance. This looks like a prompt-compliance
+    gap rather than a structural one, so tightened the wording in all three
+    prompts to explicitly name the failure mode: describing a tolerance's
+    value/unit in Remarks is not an acceptable substitute for filling
+    Units/Units2, and a Remarks-only mention while Units is blank is now
+    explicitly called out as the same violation in the validation rubrics
+    (so a case doing this should get flagged and sent through correction).
+    Unlike the two fixes above, this one is not deterministically enforced -
+    watch a fresh run's output for whether the tightened wording actually
+    closes the gap; if not, the next lever is a deterministic check in
+    `hallucination_check.py` (or a new dedicated node) that flags a step
+    whose Remarks mentions a known tolerance's unit while Units/Units2 is
+    blank, forcing it through correction rather than relying on the
+    validator LLM to catch it reliably.

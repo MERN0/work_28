@@ -9,8 +9,9 @@ rather than giving the LLM tools to look these up mid-conversation. By the
 time this stage runs, everything it could need is already small and
 feature-scoped (earlier stages already narrowed it down), so there's nothing
 this prompt is missing that a tool call would have found instead.
-`hallucination_check` still validates every reference the LLM actually used
-afterward, unchanged.
+Every step's ref_kind/target_ref/step_text is normalized right after the
+LLM call, before `hallucination_check` ever sees it - see
+`_step_normalize.py`'s module docstring.
 """
 from __future__ import annotations
 
@@ -19,8 +20,10 @@ from pydantic import BaseModel
 from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
-from ..schema import TestCase, TestStep, derive_ref_kind, derive_step_text
+from ..schema import TestCase, TestStep
 from ..state import TestCaseState
+from ..workbook_store import InMemoryWorkbookStore
+from ._step_normalize import normalize_steps
 
 _logger = get_logger(__name__)
 
@@ -61,7 +64,7 @@ def _build_user_input(state: TestCaseState) -> str:
     )
 
 
-def build(llm, settings, pipeline_config=None):
+def build(llm, settings, pipeline_config=None, store: InMemoryWorkbookStore | None = None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
         row = state["pattern_row"]
@@ -69,21 +72,9 @@ def build(llm, settings, pipeline_config=None):
         prompt = get_prompt("generate", settings)
         _logger.info("generating test case: req=%s scenario=%s", req.req_id, row.scenario_id)
         result = call_llm(llm, prompt, _build_user_input(state), _GeneratedTestCase, pipeline_config=pipeline_config)
-        # Never trust the LLM's own ref_kind - keyword alone determines it
-        # deterministically (see schema.py's derive_ref_kind docstring for
-        # the real bug this closes: a step's keyword and ref_kind could
-        # otherwise disagree, sending hallucination_check to check a real
-        # name against the wrong candidate pool). Same for step_text (see
-        # derive_step_text's docstring): the bare step text is fully
-        # determined by keyword+target_ref for every keyword but Lib, so the
-        # LLM's own (often verbose, value-duplicating) answer is discarded.
-        steps = [
-            s.model_copy(update={
-                "ref_kind": derive_ref_kind(s.keyword),
-                "step_text": derive_step_text(s.keyword, s.target_ref, s.step_text),
-            })
-            for s in result.steps
-        ]
+        # ref_kind/target_ref/step_text are never trusted from the LLM as-is -
+        # see _step_normalize.py's module docstring for the three bugs this closes.
+        steps = normalize_steps(result.steps, store)
 
         test_case = TestCase(
             test_case_id="PENDING",

@@ -102,9 +102,9 @@ def _build_inner_test_case_graph(store: InMemoryWorkbookStore, llm, settings: Se
     only looks at pass1_result/pass2_result in state, not which node wrote them.
     """
     graph = StateGraph(TestCaseState)
-    graph.add_node("generate", generate.build(llm, settings, pipeline_config))
+    graph.add_node("generate", generate.build(llm, settings, pipeline_config, store))
     graph.add_node("hallucination_check", hallucination_check.build(store, pipeline_config))
-    graph.add_node("correct", correct.build(llm, settings, pipeline_config))
+    graph.add_node("correct", correct.build(llm, settings, pipeline_config, store))
     graph.add_node("finalize_pass", finalize_pass.build())
 
     graph.set_entry_point("generate")

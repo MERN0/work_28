@@ -7,8 +7,10 @@ from pydantic import BaseModel
 from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
-from ..schema import TestStep, derive_ref_kind, derive_step_text
+from ..schema import TestStep
 from ..state import TestCaseState
+from ..workbook_store import InMemoryWorkbookStore
+from ._step_normalize import normalize_steps
 
 _logger = get_logger(__name__)
 
@@ -27,7 +29,7 @@ def _collect_issues(state: TestCaseState) -> list[str]:
     return issues
 
 
-def build(llm, settings, pipeline_config=None):
+def build(llm, settings, pipeline_config=None, store: InMemoryWorkbookStore | None = None):
     def node(state: TestCaseState) -> TestCaseState:
         req = state["requirement"]
         test_case = state["test_case"]
@@ -50,16 +52,8 @@ def build(llm, settings, pipeline_config=None):
             + "\n".join(context.get("library_details", []))
         )
         result = call_llm(llm, prompt, user_input, _CorrectedTestCase, pipeline_config=pipeline_config)
-        # Same rule as generate.py: keyword alone determines ref_kind and
-        # (for every keyword but Lib) step_text - never trust the LLM's own
-        # answer for either.
-        steps = [
-            s.model_copy(update={
-                "ref_kind": derive_ref_kind(s.keyword),
-                "step_text": derive_step_text(s.keyword, s.target_ref, s.step_text),
-            })
-            for s in result.steps
-        ]
+        # Same normalization as generate.py - see _step_normalize.py.
+        steps = normalize_steps(result.steps, store)
 
         corrected = test_case.model_copy(update={"description": result.description, "steps": steps})
         return {**state, "test_case": corrected, "issues": [], "correction_attempted": True}
