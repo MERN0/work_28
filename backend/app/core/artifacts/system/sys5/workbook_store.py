@@ -464,14 +464,40 @@ class InMemoryWorkbookStore:
         }[sheet]
         col_idx = excel_io.find_feature_column(headers, feature_id)
         if col_idx is None:
+            _logger.warning(
+                "%s: no column matched feature %r among %d header(s) - every row for this feature will be empty. "
+                "Header row sample: %r",
+                sheet, feature_id, len(headers), headers[:20],
+            )
             return []
+        _logger.debug(
+            "%s: feature %r resolved to column index %d (header=%r)", sheet, feature_id, col_idx,
+            headers[col_idx] if col_idx < len(headers) else None,
+        )
         col_map = self._resolve_columns(headers, self._SHEET_FIELD_CANDIDATES[sheet])
         rows = excel_io.rows_as_dicts(matrix, header_row, col_map)
+        raw_value_counts: dict[str, int] = {}
         for i, row in enumerate(rows):
             raw_row = matrix[header_row + 1 + i]
             marker_cell = raw_row[col_idx] if col_idx < len(raw_row) else None
             row["_marker"] = excel_io.is_marked_valid(marker_cell)
             row["_marker_raw"] = marker_cell
+            key = repr(marker_cell)
+            raw_value_counts[key] = raw_value_counts.get(key, 0) + 1
+        if rows and not any(row["_marker"] is True for row in rows):
+            # Every row for this feature needed LLM escalation (or was
+            # dropped as a clean 'x'/blank) - suspicious if this happens on
+            # every sheet for a feature that should have some valid rows.
+            # Distinct raw cell values seen, most common first, are the
+            # fastest way to tell "wrong column" from "marker isn't a plain
+            # ASCII O/x in this file" (e.g. a lookalike Unicode character, a
+            # checkmark, a formula result) from "genuinely all ambiguous".
+            top_values = sorted(raw_value_counts.items(), key=lambda kv: -kv[1])[:10]
+            _logger.warning(
+                "%s: 0 row(s) cleanly marked valid for feature %r out of %d row(s) (column index %d, header=%r) - "
+                "most common raw marker cell value(s): %s",
+                sheet, feature_id, len(rows), col_idx, headers[col_idx] if col_idx < len(headers) else None, top_values,
+            )
         return rows
 
     def lookup_command_name(self, signal_name: str, top_k: Optional[int] = None) -> list[dict[str, Any]]:
@@ -545,8 +571,19 @@ class InMemoryWorkbookStore:
             candidates += [row.get("Signal name") or row.get("Signal Name") or "" for row in self._all_signal_rows()]
             candidates += [row.get("Signal ID") or "" for row in self._all_signal_rows()]
             candidates += [row.get("Logical Signal Name") or "" for row in self._all_signal_rows()]
+            # A real name that exists, just on the "other side" of the
+            # signal/command distinction (e.g. keyword=Set instead of
+            # SDO_Set, or the model-input-vs-CAN-sourced judgment call was
+            # wrong) still passed a real name - the existence guardrail's job
+            # is "is this real", not "did you pick the stylistically perfect
+            # keyword for it" (a wrong keyword choice is a plausibility
+            # concern, catchable by validate_pass2, not a hallucination).
+            candidates += [c.command_name for c in self.command_list]
         elif ref_kind == "command":
             candidates = [c.command_name for c in self.command_list]
+            candidates += [m.signal for m in self.model_input_mapping]
+            candidates += [row.get("Signal name") or row.get("Signal Name") or "" for row in self._all_signal_rows()]
+            candidates += [row.get("Logical Signal Name") or "" for row in self._all_signal_rows()]
         elif ref_kind == "compound_command":
             candidates = list(self.compound_commands.keys())
         elif ref_kind == "tolerance":

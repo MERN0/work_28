@@ -32,6 +32,31 @@ StepKeyword = Literal[
     "Read", "ReadStore", "Compound", "Config_Tol", "FIU", "Lib",
 ]
 
+# Deterministic keyword -> ref_kind mapping (real bug found in production: the
+# LLM filled `TestStep.ref_kind` independently of `TestStep.keyword`, so a
+# step whose keyword correctly implied "command" could carry ref_kind="signal"
+# instead - hallucination_check then checked a real CAN_Main_*/CAN_HIL_* name
+# against the wrong candidate pool and failed it, even though the name was
+# real. `keyword` alone always determines what kind of thing a step
+# references - there is no legitimate case where the same keyword needs two
+# different ref_kinds - so generate.py/correct.py now overwrite whatever
+# ref_kind the LLM produced with `derive_ref_kind(step.keyword)` and never
+# trust the model's own answer for this field.
+_KEYWORD_REF_KIND: dict[str, "RefKind"] = {
+    "Test_start": "none", "End_of_test": "none", "Wait": "none",
+    "Set": "signal", "Verify": "signal", "Wait_Until": "signal",
+    "Read": "signal", "ReadStore": "signal", "FIU": "signal",
+    "SDO_Set": "command", "SDO_Verify": "command",
+    "Compound": "compound_command",
+    "Config_Tol": "tolerance",
+    "Lib": "library_call",
+}
+
+
+def derive_ref_kind(keyword: str) -> "RefKind":
+    """The one true source of a step's ref_kind - see `_KEYWORD_REF_KIND`."""
+    return _KEYWORD_REF_KIND.get(keyword, "none")
+
 
 # --------------------------------------------------------------------------
 # Requirements sheet

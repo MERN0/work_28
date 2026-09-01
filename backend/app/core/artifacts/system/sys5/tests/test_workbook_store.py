@@ -108,3 +108,16 @@ def test_hallucination_guardrail_exists(fixture_paths, feature_id):
     assert store.exists("tolerance", "Config_Tol_Invented") is False
     assert store.exists("none", None) is True
     assert store.exists("signal", None) is False
+
+
+def test_hallucination_guardrail_exists_falls_back_across_signal_and_command(fixture_paths, feature_id):
+    """Regression test for a real production bug: the LLM sometimes picks a
+    real name but the "wrong side" of the signal/command distinction (e.g.
+    keyword Set instead of SDO_Set) - that's a plausibility issue, not a
+    hallucination, so exists() must not fail a name just because it's real
+    under the other ref_kind. A genuinely invented name must still fail both."""
+    store = _load(fixture_paths, feature_id)
+    assert store.exists("signal", "CAN_HIL_PwrCtrlMode") is True  # a real command name, checked as ref_kind=signal
+    assert store.exists("command", "Main_TxS_0x2020_0x01") is True  # a real signal name, checked as ref_kind=command
+    assert store.exists("signal", "CAN_Totally_Invented_Name") is False
+    assert store.exists("command", "Totally_Invented_Signal_Name") is False

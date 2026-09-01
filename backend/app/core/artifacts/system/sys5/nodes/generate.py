@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
-from ..schema import TestCase, TestStep
+from ..schema import TestCase, TestStep, derive_ref_kind
 from ..state import TestCaseState
 
 _logger = get_logger(__name__)
@@ -69,6 +69,12 @@ def build(llm, settings, pipeline_config=None):
         prompt = get_prompt("generate", settings)
         _logger.info("generating test case: req=%s scenario=%s", req.req_id, row.scenario_id)
         result = call_llm(llm, prompt, _build_user_input(state), _GeneratedTestCase, pipeline_config=pipeline_config)
+        # Never trust the LLM's own ref_kind - keyword alone determines it
+        # deterministically (see schema.py's derive_ref_kind docstring for
+        # the real bug this closes: a step's keyword and ref_kind could
+        # otherwise disagree, sending hallucination_check to check a real
+        # name against the wrong candidate pool).
+        steps = [s.model_copy(update={"ref_kind": derive_ref_kind(s.keyword)}) for s in result.steps]
 
         test_case = TestCase(
             test_case_id="PENDING",
@@ -77,7 +83,7 @@ def build(llm, settings, pipeline_config=None):
             requirement_ids=[req.req_id],
             priority=req.priority,
             description=result.description,
-            steps=result.steps,
+            steps=steps,
         )
         return {
             **state,
