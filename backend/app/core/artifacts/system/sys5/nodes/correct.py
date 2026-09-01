@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
-from ..schema import TestCase, TestStep, derive_ref_kind
+from ..schema import TestStep, derive_ref_kind, derive_step_text
 from ..state import TestCaseState
 
 _logger = get_logger(__name__)
@@ -50,9 +50,16 @@ def build(llm, settings, pipeline_config=None):
             + "\n".join(context.get("library_details", []))
         )
         result = call_llm(llm, prompt, user_input, _CorrectedTestCase, pipeline_config=pipeline_config)
-        # Same rule as generate.py: keyword alone determines ref_kind, never
-        # trust the LLM's own answer for it.
-        steps = [s.model_copy(update={"ref_kind": derive_ref_kind(s.keyword)}) for s in result.steps]
+        # Same rule as generate.py: keyword alone determines ref_kind and
+        # (for every keyword but Lib) step_text - never trust the LLM's own
+        # answer for either.
+        steps = [
+            s.model_copy(update={
+                "ref_kind": derive_ref_kind(s.keyword),
+                "step_text": derive_step_text(s.keyword, s.target_ref, s.step_text),
+            })
+            for s in result.steps
+        ]
 
         corrected = test_case.model_copy(update={"description": result.description, "steps": steps})
         return {**state, "test_case": corrected, "issues": [], "correction_attempted": True}

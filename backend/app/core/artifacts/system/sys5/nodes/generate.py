@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ..agents import call_llm
 from ..logging_utils import get_logger
 from ..prompts import get_prompt
-from ..schema import TestCase, TestStep, derive_ref_kind
+from ..schema import TestCase, TestStep, derive_ref_kind, derive_step_text
 from ..state import TestCaseState
 
 _logger = get_logger(__name__)
@@ -73,8 +73,17 @@ def build(llm, settings, pipeline_config=None):
         # deterministically (see schema.py's derive_ref_kind docstring for
         # the real bug this closes: a step's keyword and ref_kind could
         # otherwise disagree, sending hallucination_check to check a real
-        # name against the wrong candidate pool).
-        steps = [s.model_copy(update={"ref_kind": derive_ref_kind(s.keyword)}) for s in result.steps]
+        # name against the wrong candidate pool). Same for step_text (see
+        # derive_step_text's docstring): the bare step text is fully
+        # determined by keyword+target_ref for every keyword but Lib, so the
+        # LLM's own (often verbose, value-duplicating) answer is discarded.
+        steps = [
+            s.model_copy(update={
+                "ref_kind": derive_ref_kind(s.keyword),
+                "step_text": derive_step_text(s.keyword, s.target_ref, s.step_text),
+            })
+            for s in result.steps
+        ]
 
         test_case = TestCase(
             test_case_id="PENDING",

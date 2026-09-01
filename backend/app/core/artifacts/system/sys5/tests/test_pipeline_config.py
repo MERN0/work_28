@@ -9,7 +9,7 @@ from ..pipeline_config import PipelineConfig
 def test_defaults_load_without_a_file():
     config = PipelineConfig.load(path="/nonexistent/path/pipeline_config.json")
     assert config.llm_model == "llm-1-gpt-osx-120b"
-    assert config.max_concurrent_test_cases == 4
+    assert config.max_concurrent_test_cases == 1
     assert config.combine_validation_passes is True
     assert config.hallucination_match_threshold == 92
 

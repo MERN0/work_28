@@ -138,7 +138,7 @@ explicitly rather than relying on any implicit ordering.
 | `test_pattern_gen` | `nodes/test_pattern_gen.py` | LLM plans scenarios; Python does the actual combinatorics (deterministic) |
 | `model_mapping_resolve` | `nodes/model_mapping_resolve.py` | Deterministic - exact/fuzzy lookup only; a factor value that doesn't cross the threshold is left unresolved, never guessed |
 | `compound_command_map` | `nodes/compound_command_map.py` | Deterministic - keeps the top-scoring keyword-overlap candidates outright (capped + threshold-filtered, see §7) |
-| `test_case_loop` | `nodes/test_case_loop.py` | Orchestrates the inner subgraph (§5) once per test-pattern row, concurrently |
+| `test_case_loop` | `nodes/test_case_loop.py` | Orchestrates the inner subgraph (§5) once per test-pattern row - sequentially by default (§5) |
 | `output_assemble` | `nodes/output_assemble.py` | Deterministic - writes the output workbook via `xlsx_writer.py` |
 
 Every stage that *finds* or *matches* something that already exists in the
@@ -158,8 +158,12 @@ new content.**
 
 `test_case_loop` invokes this **once per test-pattern row** (e.g. 24 times
 for a 24-row Test Pattern), each with its own fresh `TestCaseState`. Rows are
-independent, so up to `pipeline_config.max_concurrent_test_cases` run at once
-via a `ThreadPoolExecutor` (see `nodes/test_case_loop.py`).
+independent, so this *can* run up to `pipeline_config.max_concurrent_test_cases`
+at once via a `ThreadPoolExecutor` (see `nodes/test_case_loop.py`) - but that
+now defaults to 1 (fully sequential), since real output against the deployed
+backend showed quality degrading on later rows under concurrent load (see
+§9's most recent finding). Raise it only against a deployment confirmed not
+to have that problem.
 
 ```
         generate
@@ -706,3 +710,40 @@ dry run of the pipeline (not just static review)**:
     selection/resolution logic, and `tests/test_requirements_extract.py`/
     `tests/test_excel_io.py`/`tests/test_workbook_store.py` for the updated
     fast-path-only behavior of the other three.
+
+12. **User-reported: generated `TestStep.step_text` duplicated the value/
+    explanation that Parameter Settings/Expected Value/Remarks already
+    carry**, e.g. `"Set CAN_HIL_PwrCtrlMode to P (model_input = 1)"` instead
+    of the bare `"Set CAN_HIL_PwrCtrlMode"` (with Parameter Settings=`"P"`
+    separately), or `"Wait for controller to process Power-Control-Mode"`
+    instead of the bare `"Wait"` - confirmed against a real reference output
+    file showing every step as just `"<Keyword> <exact name>"` with no
+    appended value or prose (e.g. `"Config_Tol_rpm"`, `"Verify
+    CAN_Main_Cmd_D_Motor_Speed"`). Root cause: neither the `generate` nor
+    `correct` prompt ever specified a format for `step_text` at all, so the
+    model was free to write whatever it wanted there, duplicating other
+    columns inconsistently test case to test case.
+
+    Since `step_text` is fully determined by `keyword` + `target_ref` for
+    every keyword except `Lib` (whose call needs real argument values that
+    only exist in the model's own answer, e.g. `"Lib_Ramp
+    Signal_Name(Start=0,Stop=100,Step=10,Time=500)"`), fixed the same way as
+    finding 7's `ref_kind` bug: `schema.derive_step_text(keyword,
+    target_ref, fallback)` is the one true source of the bare step text,
+    and `generate.py`/`correct.py` now overwrite whatever `step_text` the
+    LLM produced with it (falling back to the LLM's own answer only for
+    `Lib`, and only if `target_ref` is somehow missing for anything else).
+    Also tightened both the `generate` and `correct` prompts to state this
+    rule explicitly, so the model doesn't spend effort on a `step_text` that
+    (for every keyword but `Lib`) gets discarded anyway. See
+    `tests/test_step_text_derivation.py`.
+
+    **Alongside this, `max_concurrent_test_cases` default changed from 4 to
+    1** (user-reported, from the same real run: later test cases in the
+    output came back with visibly thinner content than the first,
+    consistent with the deployed backend degrading under concurrent
+    request load). The concurrent path in `test_case_loop.py` is unchanged
+    and still available - `max_concurrent_test_cases` remains a
+    `pipeline_config.json` knob - but it now defaults to fully sequential
+    (one test-pattern row at a time) until that backend-under-load behavior
+    is understood well enough to trust a higher value again.

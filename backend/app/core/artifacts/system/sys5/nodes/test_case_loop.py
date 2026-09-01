@@ -4,12 +4,15 @@ flagged placeholder so the mandatory 1:1 test-pattern-to-test-case mapping
 survives even a total failure on one row.
 
 Rows are independent units of work (each gets its own fresh TestCaseState,
-reading only from the shared read-only store/tools), so they're generated
+reading only from the shared read-only store/tools), so this CAN run them
 concurrently - up to `pipeline_config.max_concurrent_test_cases` at once -
-rather than strictly sequentially. This is the single biggest lever on
+rather than strictly sequentially, and that's the single biggest lever on
 wall-clock time for a requirement with many test-pattern rows (e.g. a
-24-row Test Pattern was the original >25-minute case). Set
-max_concurrent_test_cases=1 to restore fully sequential processing.
+24-row Test Pattern was the original >25-minute case). It currently
+defaults to 1 (fully sequential, one test-pattern row at a time) though -
+see that field's comment in pipeline_config.py for why: real output against
+the deployed backend degraded on later rows under concurrent load. Raise it
+past 1 only against a deployment confirmed not to have that problem.
 """
 from __future__ import annotations
 

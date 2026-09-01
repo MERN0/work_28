@@ -137,9 +137,16 @@ class PipelineConfig:
     max_test_cases_per_requirement: int = 5
     # How many test-pattern rows to generate+validate concurrently in
     # test_case_loop.py. Each row is an independent unit of work (its own
-    # TestCaseState, its own LLM calls) so this is safe to raise; bounded by
-    # the LLM proxy's real concurrency headroom. 1 = fully sequential.
-    max_concurrent_test_cases: int = 4
+    # TestCaseState, its own LLM calls), so raising this is structurally
+    # safe - but user-reported output against the real deployment (self-
+    # hosted gpt-oss-120b via vLLM/litellm) showed real quality degradation
+    # under concurrent load: later test cases in a run came back with
+    # thinner/incomplete steps than the first. Defaults to 1 (fully
+    # sequential, one test-pattern row at a time) until that backend-under-
+    # load behavior is understood well enough to trust a higher value again;
+    # raise it back only against a deployment/model confirmed not to degrade
+    # under concurrent requests.
+    max_concurrent_test_cases: int = 1
     # Run validate_pass1 and validate_pass2 as ONE combined LLM call (two
     # rubrics, one round trip) instead of two separate calls. Roughly halves
     # the validation stage's LLM round trips with no loss of rubric coverage.

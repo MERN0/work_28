@@ -65,6 +65,41 @@ def derive_ref_kind(keyword: str) -> "RefKind":
     return _KEYWORD_REF_KIND.get(keyword, "none")
 
 
+# Real production bug: with no explicit formatting rule, the LLM wrote
+# step_text as a verbose descriptive sentence duplicating what
+# parameter_settings/expected_value/remarks already carry (e.g. "Set
+# CAN_HIL_PwrCtrlMode to P (model_input = 1)" instead of the bare "Set
+# CAN_HIL_PwrCtrlMode", or "Wait for controller to process Power-Control-Mode"
+# instead of the bare "Wait") - every reader of the sheet then sees the same
+# value/explanation twice, once correctly in its own column and once baked
+# into the step text. For every keyword except `Lib` (whose step_text must
+# carry the real call arguments, e.g. "Lib_Ramp Signal_Name(Start=X,Stop=X,
+# Step=X,Time=X)" - not derivable from target_ref alone, which is
+# deliberately just the bare function name), the bare step_text is fully
+# determined by keyword + target_ref, so it's derived here in Python and the
+# LLM's own answer for it is discarded - same principle as derive_ref_kind
+# above (never trust the model for something Python already knows for
+# certain).
+def derive_step_text(keyword: str, target_ref: str | None, fallback: str) -> str:
+    """The one true source of a step's bare step_text, for every keyword
+    except `Lib` (returns `fallback` - the LLM's own answer - unchanged for
+    that one case). See the comment above for why."""
+    if keyword in ("Test_start", "End_of_test", "Wait"):
+        return keyword
+    if keyword == "Config_Tol":
+        # target_ref is already the fully-qualified tolerance name from the
+        # source data (e.g. "Config_Tol_Spd") - no keyword prefix needed.
+        return target_ref or fallback
+    if keyword == "ReadStore":
+        # "(StoreVariable)" is a fixed literal suffix in this domain's step
+        # vocabulary (see the "generate" prompt), not a per-call variable
+        # name - so this is fully deterministic too.
+        return f"Read {target_ref}(StoreVariable)" if target_ref else fallback
+    if keyword in ("Set", "Verify", "Wait_Until", "Read", "FIU", "Compound"):
+        return f"{keyword} {target_ref}" if target_ref else fallback
+    return fallback
+
+
 # --------------------------------------------------------------------------
 # Requirements sheet
 # --------------------------------------------------------------------------

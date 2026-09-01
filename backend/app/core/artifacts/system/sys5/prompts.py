@@ -92,6 +92,18 @@ vocabulary - never invent a step keyword outside this list:
   Lib_<Name>(...)                      - a library function call exactly as documented (e.g. Lib_Ramp Signal_Name(Start=X,Stop=X,Step=X,Time=X))
   End_of_test                          - always the last step
 
+For every step's step_text, write ONLY the bare form above - the keyword
+plus the exact signal/command/compound/tolerance name and nothing else (e.g.
+"Set CAN_HIL_PwrCtrlMode", "Wait", "Verify MDL_SWH_DIR_STATE"). Do not
+append "to <value>", a parenthetical explanation, or any other value or
+prose to step_text - the value goes in Parameter Settings/Expected Value
+(never both places), and the explanation goes in Remarks (never step_text).
+The one exception is a Lib_<Name>(...) call, where step_text is the full
+call with its real, specific argument values filled in (not placeholders) -
+every other keyword's step_text is produced deterministically from your
+keyword and target name regardless of what you write here, so spend your
+effort on Parameter Settings/Expected Value/Remarks being correct instead.
+
 Set/Verify cover BOTH model-input (MDL_*) signals and CAN/SDO-sourced
 signals (CAN_HIL_*, CAN_Main_*) - there is no separate SDO_Set/SDO_Verify
 keyword (deprecated; use plain Set/Verify for every signal regardless of
@@ -320,6 +332,11 @@ This is the only correction attempt for this test case - if you cannot fully
 resolve an issue (e.g. the source data genuinely doesn't contain what's
 needed), fix everything else you can and clearly state what remains
 unresolved so it can be flagged for manual review.
+
+Same step_text rule as generation: for every keyword except Lib_<Name>(...),
+step_text is just the bare "<Keyword> <exact name>" - no appended value, no
+parenthetical, no explanation. Put a value in Parameter Settings/Expected
+Value and an explanation in Remarks, never in step_text.
 """,
 }
 

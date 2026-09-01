@@ -33,7 +33,7 @@ from ..agents import call_llm
 from ..factors import get_factor_table
 from ..logging_utils import get_logger, stage_timer
 from ..prompts import get_prompt
-from ..schema import FactorTable, Requirement, TestPatternRow, format_heading_info
+from ..schema import FactorTable, TestPatternRow, format_heading_info
 from ..state import PipelineState
 from ..workbook_store import InMemoryWorkbookStore
 
