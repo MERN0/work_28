@@ -52,16 +52,20 @@ class PipelineConfig:
     #   forces tool_choice. Switch to this if a particular backend build
     #   handles json_schema poorly.
     structured_output_method: str = "json_schema"
-    # gpt-oss (and other reasoning models) accept an OpenAI `reasoning_effort`
-    # ("low"/"medium"/"high"). Defaults to "low": every stage in this
-    # pipeline only ever asks for a small, already-scoped answer (a short
-    # plan, a handful of steps), never open-ended reasoning, so spending
-    # "medium"/"high" analysis-token budget on it is wall-clock cost with no
-    # real benefit - and wall-clock time (a full run reportedly taking
-    # "infinitely long") is the priority here. Set to None to stop sending it
-    # (the model's own default applies) if answer quality ever regresses
-    # enough to be worth the trade back.
-    llm_reasoning_effort: str | None = "low"
+    # gpt-oss (and other reasoning models) can accept an OpenAI
+    # `reasoning_effort` param ("low"/"medium"/"high") to trade planning depth
+    # for wall-clock time. Defaults to None (not sent) - tried as "low" for
+    # exactly that wall-clock reason, but a real run against this deployment's
+    # litellm proxy came back with a hard 400: `litellm.UnsupportedParamsError:
+    # openai does not support parameters: ['reasoning_effort'] ... To drop
+    # these, set litellm.drop_params=True`. This proxy/model routing does not
+    # accept the param at all (not a soft ignore), so sending it by default
+    # breaks every stage, not just the reasoning-heavy ones. Only re-enable
+    # (set to "low"/"medium"/"high") once the proxy's own
+    # `litellm_settings.drop_params: true` (or `allowed_openai_params:
+    # ['reasoning_effort']`) is confirmed - a client-side setting can't work
+    # around a server that flatly rejects the parameter.
+    llm_reasoning_effort: str | None = None
     # `ChatOpenAI(output_version=...)` - "v0" keeps AIMessage.content a plain
     # string (langchain-openai's pre-1.0 format) instead of the >=1.0 default
     # ("responses/v1"), a list of typed content blocks. The SYS5 endpoint is

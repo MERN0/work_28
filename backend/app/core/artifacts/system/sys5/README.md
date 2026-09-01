@@ -618,3 +618,25 @@ dry run of the pipeline (not just static review)**:
    the dry-run driver's scripted stub was updated the same way and re-verified
    end to end (5 test cases, 0 flagged, using `Set` for the CAN-sourced
    `CAN_HIL_PwrCtrlMode`/`CAN_Main_Slope_Assist_Enabled_Disabled` steps).
+
+10. **`llm_reasoning_effort="low"` (finding 8 above) reverted back to `None`.**
+    A real run against `requirements_extract` - the very first LLM-backed
+    stage - came back with a hard `400`:
+
+        openai.BadRequestError: Error code: 400 - {'error': {'message':
+        "litellm.UnsupportedParamsError: openai does not support parameters:
+        ['reasoning_effort'], for model=/model. To drop these, set
+        `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n
+        drop_params: true`..."}}
+
+    This deployment's litellm proxy routes this model group through a
+    generic `openai`-provider path that does not accept `reasoning_effort`
+    at all - not a soft ignore, a hard rejection - so sending it broke every
+    single stage, not just the reasoning-heavy ones (worse than the
+    wall-clock problem it was meant to fix). There is no client-side way to
+    work around a proxy that flatly rejects a parameter; the fix is
+    server-side (`litellm_settings.drop_params: true`, or
+    `allowed_openai_params: ['reasoning_effort']`, on the proxy config -
+    outside this codebase). `llm_reasoning_effort` defaults to `None` again
+    (never sent) until that proxy-side change is confirmed; see the field's
+    updated comment in `pipeline_config.py` for the re-enable condition.
